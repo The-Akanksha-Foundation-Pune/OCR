@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a4a3a" />
+  <title>History — Student ID OCR</title>
+  <link
+    rel="icon"
+    type="image/svg+xml"
+    href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='6' fill='%230e6b52'/><path d='M5.5 8a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2V8Z' fill='none' stroke='white' stroke-width='1.6'/><path d='M8.5 11h7M8.5 14.3h4.5' stroke='white' stroke-width='1.6' stroke-linecap='round'/></svg>"
+  />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  {% include "_nav.html" %}
+  <main class="page page-wide">
+    <header class="header">
+      <p class="brand">Akanksha Form OCR</p>
+      <h1>Scan history</h1>
+      <p class="lede">
+        Students already marked scanned in <strong>active_student_data</strong>,
+        and recent confirm attempts whose Student ID couldn't be matched.
+      </p>
+    </header>
+
+    <section class="panel history-panel" aria-label="Scan history">
+      <div class="tabs" role="tablist">
+        <button type="button" class="tab-btn active" data-tab="scanned" role="tab" aria-selected="true">
+          Scanned <span id="scanned-count" class="tab-count">—</span>
+        </button>
+        <button type="button" class="tab-btn" data-tab="not-found" role="tab" aria-selected="false">
+          Not found <span id="not-found-count" class="tab-count">—</span>
+        </button>
+      </div>
+
+      <div class="table-toolbar">
+        <input
+          id="search-input"
+          class="search-input"
+          type="text"
+          placeholder="Search by Student ID or name…"
+          autocomplete="off"
+          autocapitalize="characters"
+          spellcheck="false"
+        />
+      </div>
+
+      <div id="table-status" class="status" hidden></div>
+
+      <div id="scanned-tab" class="tab-panel">
+        <div class="table-scroll">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Student ID</th>
+                <th>Name</th>
+                <th>School</th>
+                <th>Grade</th>
+                <th>Division</th>
+                <th>Scanned at</th>
+              </tr>
+            </thead>
+            <tbody id="scanned-body"></tbody>
+          </table>
+        </div>
+        <p id="scanned-empty" class="empty-state" hidden>
+          <svg class="empty-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6" />
+            <path d="M8.5 12.5l2.2 2.2 4.8-5.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          No students scanned yet.
+        </p>
+      </div>
+
+      <div id="not-found-tab" class="tab-panel" hidden>
+        <div class="table-scroll">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Student ID entered</th>
+                <th>Source</th>
+                <th>Result</th>
+                <th>When</th>
+                <th aria-label="Actions"></th>
+              </tr>
+            </thead>
+            <tbody id="not-found-body"></tbody>
+          </table>
+        </div>
+        <p id="not-found-empty" class="empty-state" hidden>
+          <svg class="empty-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6" />
+            <path d="M8.5 12.5l2.2 2.2 4.8-5.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          No unmatched scans — nice.
+        </p>
+      </div>
+
+      <div class="pagination">
+        <button type="button" id="prev-btn" class="secondary-btn page-btn">Prev</button>
+        <span id="page-label" class="page-label">Page 1</span>
+        <button type="button" id="next-btn" class="secondary-btn page-btn">Next</button>
+      </div>
+    </section>
+
+    <footer class="app-footer">
+      <p>Akanksha Form OCR — Student ID extraction &amp; lookup for <strong>active_student_data</strong>.</p>
+    </footer>
+  </main>
+
+  <div id="delete-modal" class="modal-overlay" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
+      <p id="delete-modal-title" class="modal-title">Delete this entry?</p>
+      <p class="modal-hint">
+        This will permanently remove <strong id="delete-modal-id"></strong> from the
+        "Not found" log. This can't be undone.
+      </p>
+
+      <div class="modal-actions">
+        <button type="button" id="delete-cancel-btn" class="secondary-btn">Cancel</button>
+        <button type="button" id="delete-confirm-btn" class="danger-btn">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const tabButtons = document.querySelectorAll(".tab-btn");
+    const scannedTab = document.getElementById("scanned-tab");
+    const notFoundTab = document.getElementById("not-found-tab");
+    const scannedBody = document.getElementById("scanned-body");
+    const notFoundBody = document.getElementById("not-found-body");
+    const scannedEmpty = document.getElementById("scanned-empty");
+    const notFoundEmpty = document.getElementById("not-found-empty");
+    const scannedCount = document.getElementById("scanned-count");
+    const notFoundCount = document.getElementById("not-found-count");
+    const searchInput = document.getElementById("search-input");
+    const tableStatus = document.getElementById("table-status");
+    const prevBtn = document.getElementById("prev-btn");
+    const nextBtn = document.getElementById("next-btn");
+    const pageLabel = document.getElementById("page-label");
+
+    const PAGE_SIZE = 25;
+    let activeTab = "scanned";
+    let page = 1;
+    let total = 0;
+    let searchTimer = null;
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (c) => (
+        { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+      ));
+    }
+
+    function apiForTab(tab) {
+      return tab === "scanned" ? "/api/scanned" : "/api/not-found";
+    }
+
+    async function loadTab() {
+      tableStatus.hidden = false;
+      tableStatus.className = "status pending";
+      tableStatus.textContent = "Loading…";
+
+      const params = new URLSearchParams({
+        page: String(page),
+        page_size: String(PAGE_SIZE),
+      });
+      const search = searchInput.value.trim();
+      if (search) params.set("search", search);
+
+      try {
+        const response = await fetch(`${apiForTab(activeTab)}?${params.toString()}`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Failed to load.");
+
+        total = data.total || 0;
+        renderRows(data.items || []);
+        updateCount();
+        updatePagination();
+        tableStatus.hidden = true;
+      } catch (error) {
+        tableStatus.className = "status error";
+        tableStatus.textContent = error.message;
+      }
+    }
+
+    function renderRows(items) {
+      if (activeTab === "scanned") {
+        scannedBody.innerHTML = items
+          .map(
+            (row) => `
+              <tr>
+                <td class="mono">${escapeHtml(row.student_id)}</td>
+                <td>${escapeHtml(row.student_name) || "—"}</td>
+                <td>${escapeHtml(row.school_name) || "—"}</td>
+                <td>${escapeHtml(row.grade_name) || "—"}</td>
+                <td>${escapeHtml(row.division_name) || "—"}</td>
+                <td>${escapeHtml(row.scanned_at) || "—"}</td>
+              </tr>`
+          )
+          .join("");
+        scannedEmpty.hidden = items.length !== 0;
+      } else {
+        notFoundBody.innerHTML = items
+          .map(
+            (row) => `
+              <tr data-id="${row.id}">
+                <td class="mono">${escapeHtml(row.confirmed_student_id)}</td>
+                <td>${escapeHtml(row.source) || "—"}</td>
+                <td><span class="pill missing">Not found</span></td>
+                <td>${escapeHtml(row.created_at)}</td>
+                <td>
+                  <button type="button" class="delete-btn" data-id="${row.id}" title="Delete this entry">
+                    Delete
+                  </button>
+                </td>
+              </tr>`
+          )
+          .join("");
+        notFoundEmpty.hidden = items.length !== 0;
+      }
+    }
+
+    const deleteModal = document.getElementById("delete-modal");
+    const deleteModalId = document.getElementById("delete-modal-id");
+    const deleteCancelBtn = document.getElementById("delete-cancel-btn");
+    const deleteConfirmBtn = document.getElementById("delete-confirm-btn");
+
+    // The row + id currently up for deletion, set while the modal is open.
+    let pendingDelete = null;
+
+    function openDeleteModal(id, row) {
+      pendingDelete = { id, row };
+      const studentId = row.querySelector("td.mono")?.textContent || "this entry";
+      deleteModalId.textContent = studentId;
+      deleteConfirmBtn.disabled = false;
+      deleteConfirmBtn.textContent = "Delete";
+      deleteModal.hidden = false;
+    }
+
+    function closeDeleteModal() {
+      deleteModal.hidden = true;
+      pendingDelete = null;
+    }
+
+    deleteCancelBtn.addEventListener("click", closeDeleteModal);
+
+    deleteModal.addEventListener("click", (event) => {
+      if (event.target === deleteModal) closeDeleteModal();
+    });
+
+    deleteConfirmBtn.addEventListener("click", async () => {
+      if (!pendingDelete) return;
+      const { id, row } = pendingDelete;
+      deleteConfirmBtn.disabled = true;
+      deleteCancelBtn.disabled = true;
+      deleteConfirmBtn.textContent = "Deleting…";
+
+      try {
+        const response = await fetch(`/api/not-found/${id}`, { method: "DELETE" });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Delete failed.");
+
+        row.remove();
+        total = Math.max(0, total - 1);
+        updateCount();
+        updatePagination();
+        if (notFoundBody.children.length === 0) {
+          notFoundEmpty.hidden = false;
+        }
+        closeDeleteModal();
+      } catch (error) {
+        tableStatus.hidden = false;
+        tableStatus.className = "status error";
+        tableStatus.textContent = error.message;
+        closeDeleteModal();
+      } finally {
+        deleteCancelBtn.disabled = false;
+      }
+    });
+
+    notFoundBody.addEventListener("click", (event) => {
+      const deleteBtn = event.target.closest(".delete-btn");
+      if (!deleteBtn) return;
+      const row = deleteBtn.closest("tr");
+      openDeleteModal(deleteBtn.dataset.id, row);
+    });
+
+    function updateCount() {
+      if (activeTab === "scanned") {
+        scannedCount.textContent = total;
+      } else {
+        notFoundCount.textContent = total;
+      }
+    }
+
+    function updatePagination() {
+      const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+      pageLabel.textContent = `Page ${page} of ${totalPages} — ${total} total`;
+      prevBtn.disabled = page <= 1;
+      nextBtn.disabled = page >= totalPages;
+    }
+
+    function switchTab(tab) {
+      activeTab = tab;
+      page = 1;
+      tabButtons.forEach((btn) => {
+        const isActive = btn.dataset.tab === tab;
+        btn.classList.toggle("active", isActive);
+        btn.setAttribute("aria-selected", String(isActive));
+      });
+      scannedTab.hidden = tab !== "scanned";
+      notFoundTab.hidden = tab !== "not-found";
+      searchInput.value = "";
+      searchInput.placeholder =
+        tab === "scanned"
+          ? "Search by Student ID or name…"
+          : "Search by Student ID entered…";
+      loadTab();
+    }
+
+    tabButtons.forEach((btn) => {
+      btn.addEventListener("click", () => switchTab(btn.dataset.tab));
+    });
+
+    prevBtn.addEventListener("click", () => {
+      if (page > 1) {
+        page -= 1;
+        loadTab();
+      }
+    });
+
+    nextBtn.addEventListener("click", () => {
+      const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+      if (page < totalPages) {
+        page += 1;
+        loadTab();
+      }
+    });
+
+    searchInput.addEventListener("input", () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => {
+        page = 1;
+        loadTab();
+      }, 350);
+    });
+
+    (async function preloadCounts() {
+      try {
+        const [scannedRes, notFoundRes] = await Promise.all([
+          fetch("/api/scanned?page=1&page_size=1"),
+          fetch("/api/not-found?page=1&page_size=1"),
+        ]);
+        const scannedData = await scannedRes.json();
+        const notFoundData = await notFoundRes.json();
+        scannedCount.textContent = scannedData.total ?? "—";
+        notFoundCount.textContent = notFoundData.total ?? "—";
+      } catch (_error) {
+        // Non-fatal — the active tab's own load will refresh this anyway.
+      }
+    })();
+
+    loadTab();
+  </script>
+</body>
+</html>

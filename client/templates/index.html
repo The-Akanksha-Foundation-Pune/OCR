@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a4a3a" />
+  <title>Student ID OCR</title>
+  <link
+    rel="icon"
+    type="image/svg+xml"
+    href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='6' fill='%230e6b52'/><path d='M5.5 8a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2V8Z' fill='none' stroke='white' stroke-width='1.6'/><path d='M8.5 11h7M8.5 14.3h4.5' stroke='white' stroke-width='1.6' stroke-linecap='round'/></svg>"
+  />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  {% include "_nav.html" %}
+  <main class="page">
+    <header class="header">
+      <p class="brand">Akanksha Form OCR</p>
+      <h1>Extract Student ID</h1>
+      <p class="lede">
+        Prefer <strong>Take photo</strong>. Capture the <strong>full first page</strong>
+        so the Student ID line is visible (IDs look like <strong>MOHSHA011021</strong>).
+      </p>
+    </header>
+
+    <section class="panel" aria-label="Upload scan">
+      <form id="upload-form">
+        <div class="action-grid">
+          <label class="action-btn camera-btn" for="camera-input">
+            <span class="action-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M4 8.5A2 2 0 0 1 6 6.5h1.6l.7-1.4A1.5 1.5 0 0 1 9.6 4.3h4.8a1.5 1.5 0 0 1 1.3.8l.7 1.4H18a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                <circle cx="12" cy="12.5" r="3.2" stroke="currentColor" stroke-width="1.6"/>
+              </svg>
+            </span>
+            <span class="action-text">
+              <span class="action-title">Take photo</span>
+              <span class="action-hint">Opens phone camera</span>
+            </span>
+          </label>
+          <input
+            id="camera-input"
+            class="sr-only"
+            type="file"
+            accept="image/*"
+            capture="environment"
+          />
+
+          <label class="action-btn file-btn" for="file-input">
+            <span class="action-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M8 3.5h5.5L18 8v10.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 18.5V5A1.5 1.5 0 0 1 8 3.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                <path d="M13.2 3.6V8h4.4" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+              </svg>
+            </span>
+            <span class="action-text">
+              <span class="action-title">Choose file(s)</span>
+              <span class="action-hint">CamScanner JPG/PDF — pick several at once</span>
+            </span>
+          </label>
+          <input
+            id="file-input"
+            class="sr-only"
+            name="file"
+            type="file"
+            multiple
+            accept=".jpg,.jpeg,.png,.pdf,image/*,application/pdf"
+          />
+        </div>
+
+        <p id="file-name" class="file-name" hidden></p>
+        <button type="submit" id="submit-btn" disabled>Extract Student ID</button>
+      </form>
+
+      <div class="divider"><span>or</span></div>
+
+      <form id="manual-form" class="manual-entry">
+        <label for="manual-input" class="modal-label">Enter Student ID directly</label>
+        <div class="manual-entry-row">
+          <input
+            id="manual-input"
+            class="confirm-input manual-input"
+            type="text"
+            autocomplete="off"
+            autocapitalize="characters"
+            spellcheck="false"
+            placeholder="e.g. MOHSHA011021"
+          />
+          <button type="submit" id="manual-submit-btn" class="secondary-btn manual-submit-btn" hidden>
+            Check &amp; Save
+          </button>
+        </div>
+      </form>
+
+      <div id="status" class="status" hidden>
+        <span class="spinner" aria-hidden="true"></span>
+        <span id="status-text"></span>
+      </div>
+      <div id="result" class="result" hidden>
+        <p class="result-label">Student ID</p>
+        <p id="student-id" class="student-id"></p>
+        <p id="db-badge" class="db-badge" hidden></p>
+        <dl class="meta">
+          <div><dt>Confidence</dt><dd id="confidence"></dd></div>
+          <div><dt>Form language</dt><dd id="language"></dd></div>
+          <div><dt>Source</dt><dd id="source"></dd></div>
+        </dl>
+        <div id="db-debug" class="db-debug" hidden>
+          <p class="result-label">DB debug (what was sent)</p>
+          <pre id="db-debug-text" class="db-debug-text"></pre>
+        </div>
+        <div id="student-card" class="student-card" hidden>
+          <p class="result-label">Database match</p>
+          <dl class="meta">
+            <div><dt>Name</dt><dd id="db-name"></dd></div>
+            <div><dt>School</dt><dd id="db-school"></dd></div>
+            <div><dt>Grade</dt><dd id="db-grade"></dd></div>
+            <div><dt>Division</dt><dd id="db-division"></dd></div>
+            <div><dt>Year</dt><dd id="db-year"></dd></div>
+            <div><dt>Status</dt><dd id="db-status"></dd></div>
+            <div><dt>Scanned at</dt><dd id="db-scanned"></dd></div>
+          </dl>
+        </div>
+      </div>
+    </section>
+
+    <section class="tips">
+      <h2>How it works</h2>
+      <div class="steps-grid">
+        <div class="step-card">
+          <span class="step-num" aria-hidden="true">1</span>
+          <div>
+            <p class="step-title">Take a photo</p>
+            <p class="step-text">Camera opens, and extraction starts automatically.</p>
+          </div>
+        </div>
+        <div class="step-card">
+          <span class="step-num" aria-hidden="true">2</span>
+          <div>
+            <p class="step-title">Capture the full page</p>
+            <p class="step-text">Keep the Student ID line sharp, close, and well lit.</p>
+          </div>
+        </div>
+        <div class="step-card">
+          <span class="step-num" aria-hidden="true">3</span>
+          <div>
+            <p class="step-title">Already use CamScanner? (optional)</p>
+            <p class="step-text">
+              Scan with the CamScanner app → export as JPG/PDF → come back here
+              and tap <strong>Choose file(s)</strong> to upload it.
+            </p>
+          </div>
+        </div>
+        <div class="step-card">
+          <span class="step-num" aria-hidden="true">4</span>
+          <div>
+            <p class="step-title">Scanning many forms?</p>
+            <p class="step-text">
+              Select them all at once — every page from every file gets queued up
+              for you to confirm, one at a time.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <footer class="app-footer">
+      <p>Akanksha Form OCR — Student ID extraction &amp; lookup for <strong>active_student_data</strong>.</p>
+    </footer>
+  </main>
+
+  <div id="confirm-modal" class="modal-overlay" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <p id="modal-page-info" class="modal-page-info" hidden></p>
+      <p id="modal-title" class="modal-title">Is this the right Student ID?</p>
+      <p class="modal-hint">
+        We read this from the scan. Check it carefully — handwriting can be
+        misread. Edit the box below if it's wrong, then confirm.
+      </p>
+
+      <label for="confirm-input" class="modal-label">Student ID</label>
+      <input
+        id="confirm-input"
+        class="confirm-input"
+        type="text"
+        autocomplete="off"
+        autocapitalize="characters"
+        spellcheck="false"
+        placeholder="e.g. MOHSHA011021"
+      />
+
+      <p id="confirm-hint" class="confirm-hint" hidden></p>
+      <p id="modal-loading" class="modal-loading" hidden>
+        <span class="spinner" aria-hidden="true"></span>
+        <span>Still reading the next file — this will continue automatically.</span>
+      </p>
+      <p id="confirm-status" class="status" hidden>
+        <span class="spinner" aria-hidden="true"></span>
+        <span id="confirm-status-text"></span>
+      </p>
+
+      <div class="modal-actions">
+        <button type="button" id="confirm-cancel-btn" class="secondary-btn">
+          Cancel
+        </button>
+        <button type="button" id="confirm-save-btn" class="primary-btn">
+          Confirm &amp; Save
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById("upload-form");
+    const manualForm = document.getElementById("manual-form");
+    const manualInput = document.getElementById("manual-input");
+    const manualSubmitBtn = document.getElementById("manual-submit-btn");
+    const fileInput = document.getElementById("file-input");
+    const cameraInput = document.getElementById("camera-input");
+    const fileName = document.getElementById("file-name");
+    const statusEl = document.getElementById("status");
+    const statusText = document.getElementById("status-text");
+    const resultEl = document.getElementById("result");
+    const submitBtn = document.getElementById("submit-btn");
+    const dbBadge = document.getElementById("db-badge");
+    const studentCard = document.getElementById("student-card");
+    const dbDebug = document.getElementById("db-debug");
+    const dbDebugText = document.getElementById("db-debug-text");
+
+    const confirmModal = document.getElementById("confirm-modal");
+    const modalPageInfo = document.getElementById("modal-page-info");
+    const modalLoading = document.getElementById("modal-loading");
+    const confirmInput = document.getElementById("confirm-input");
+    const confirmHint = document.getElementById("confirm-hint");
+    const confirmStatus = document.getElementById("confirm-status");
+    const confirmStatusText = document.getElementById("confirm-status-text");
+    const confirmCancelBtn = document.getElementById("confirm-cancel-btn");
+    const confirmSaveBtn = document.getElementById("confirm-save-btn");
+
+    let selectedFiles = [];
+
+    // A "batch" is one or more pages read from one or more uploaded files —
+    // a printer scanner can produce a multi-page PDF from a whole stack of
+    // forms, or you can pick several separate PDFs/images at once. Either
+    // way, every page from every selected file lands in ONE combined queue
+    // so the confirm modal walks through them one at a time.
+    let pageQueue = [];
+    let pageIndex = 0;
+    let batchSummary = { saved: 0, notFound: 0, skipped: 0 };
+    // True while files are still being read in the background — lets the
+    // very first page pop up as soon as it's ready, instead of waiting for
+    // every selected file to finish OCR first.
+    let filesLoading = false;
+    // True once the user has confirmed/skipped their way to the end of the
+    // pages we know about so far, but more files are still loading.
+    let waitingForMore = false;
+
+    function showCurrentPage() {
+      const total = pageQueue.length;
+      const page = pageQueue[pageIndex] || {};
+
+      confirmStatus.hidden = true;
+      confirmHint.hidden = true;
+      modalLoading.hidden = true;
+      confirmSaveBtn.disabled = false;
+      confirmCancelBtn.disabled = false;
+
+      if (total > 1 || filesLoading) {
+        modalPageInfo.hidden = false;
+        // A trailing "+" means more pages may still be loading in — the
+        // real total isn't known for certain yet.
+        modalPageInfo.textContent = `Page ${pageIndex + 1} of ${total}${filesLoading ? "+" : ""}`;
+      } else {
+        modalPageInfo.hidden = true;
+      }
+
+      if (page.student_id && !page.error) {
+        // Raw OCR reading only — the database hasn't been checked yet.
+        // Show it exactly as read so the user can compare it to the paper.
+        confirmInput.value = page.student_id;
+        confirmHint.hidden = false;
+        confirmHint.className = "confirm-hint neutral";
+        confirmHint.textContent =
+          "This is what we read from the scan — not yet checked against the " +
+          "database. Compare it to the paper, edit if it's wrong, then Confirm & Save.";
+      } else {
+        confirmInput.value = "";
+        confirmHint.hidden = false;
+        confirmHint.className = "confirm-hint";
+        confirmHint.textContent =
+          page.error || "Could not read a Student ID automatically. Type it in below.";
+      }
+
+      // Only call it "Cancel" (a final action) once we're sure no more
+      // files are loading — otherwise it really is just skipping ahead.
+      const isDefinitelyLastPage = pageIndex >= total - 1 && !filesLoading;
+      confirmCancelBtn.textContent = isDefinitelyLastPage ? "Cancel" : "Skip this page";
+
+      confirmModal.hidden = false;
+      confirmInput.focus();
+      confirmInput.select();
+    }
+
+    function showLoadingMoreState() {
+      modalPageInfo.hidden = true;
+      confirmHint.hidden = true;
+      modalLoading.hidden = false;
+      confirmInput.value = "";
+      confirmStatus.hidden = true;
+      confirmSaveBtn.disabled = true;
+      confirmCancelBtn.disabled = true;
+      confirmModal.hidden = false;
+    }
+
+    function appendPages(newPages) {
+      if (!newPages || newPages.length === 0) return;
+      const hadNothingYet = pageQueue.length === 0;
+      pageQueue.push(...newPages);
+
+      if (hadNothingYet) {
+        pageIndex = 0;
+        statusEl.hidden = false;
+        statusEl.className = "status pending";
+        statusText.textContent = filesLoading
+          ? "Please confirm below — more pages may still be loading in the background."
+          : "Please confirm the Student ID below.";
+        showCurrentPage();
+      } else if (waitingForMore) {
+        waitingForMore = false;
+        showCurrentPage();
+      } else if (!confirmModal.hidden) {
+        // User is mid-way through earlier pages — just keep the "Page X of
+        // N" badge accurate without disturbing what they're editing.
+        const total = pageQueue.length;
+        modalPageInfo.hidden = false;
+        modalPageInfo.textContent = `Page ${pageIndex + 1} of ${total}${filesLoading ? "+" : ""}`;
+      }
+    }
+
+    function closeConfirmModal() {
+      confirmModal.hidden = true;
+    }
+
+    function advanceQueue() {
+      pageIndex += 1;
+      if (pageIndex >= pageQueue.length) {
+        if (filesLoading) {
+          // Caught up to what's loaded so far, but more files are still
+          // being read — wait for them instead of ending the batch early.
+          waitingForMore = true;
+          showLoadingMoreState();
+          return;
+        }
+        closeConfirmModal();
+        finishBatch();
+        return;
+      }
+      showCurrentPage();
+    }
+
+    function maybeFinishIfWaiting() {
+      if (waitingForMore && pageIndex >= pageQueue.length) {
+        waitingForMore = false;
+        closeConfirmModal();
+        finishBatch();
+      }
+    }
+
+    function finishBatch() {
+      submitBtn.disabled = selectedFiles.length === 0;
+      const total = pageQueue.length;
+
+      if (total <= 1) {
+        // Single-page: a successful confirm already shows its own result
+        // via renderFinalResult below — only a skip/cancel needs a note here.
+        if (batchSummary.skipped >= 1) {
+          statusEl.hidden = false;
+          statusEl.className = "status error";
+          statusText.textContent = "Cancelled — nothing was saved.";
+        }
+        return;
+      }
+
+      statusEl.hidden = false;
+      statusEl.className = "status ok";
+      statusText.textContent =
+        `Batch done — ${total} page(s): ${batchSummary.saved} saved, ` +
+        `${batchSummary.notFound} not found, ${batchSummary.skipped} skipped.`;
+    }
+
+    async function confirmAndSave() {
+      const value = confirmInput.value.trim().toUpperCase();
+      if (!value) {
+        confirmHint.hidden = false;
+        confirmHint.textContent = "Type a Student ID first.";
+        return;
+      }
+      const page = pageQueue[pageIndex] || {};
+      confirmSaveBtn.disabled = true;
+      confirmCancelBtn.disabled = true;
+      confirmStatus.hidden = false;
+      confirmStatus.className = "status pending";
+      confirmStatusText.textContent = "Saving…";
+
+      try {
+        const response = await fetch("/api/confirm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            student_id: value,
+            scan_id: page.scan_id || "",
+            page_number: page.page_number || pageIndex + 1,
+          }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Confirm failed");
+        renderFinalResult(data);
+        if (data.found_in_db) {
+          batchSummary.saved += 1;
+        } else {
+          batchSummary.notFound += 1;
+        }
+        advanceQueue();
+      } catch (error) {
+        confirmStatus.className = "status error";
+        confirmStatusText.textContent = error.message;
+        confirmSaveBtn.disabled = false;
+        confirmCancelBtn.disabled = false;
+      }
+    }
+
+    confirmCancelBtn.addEventListener("click", () => {
+      batchSummary.skipped += 1;
+      advanceQueue();
+    });
+
+    confirmSaveBtn.addEventListener("click", confirmAndSave);
+
+    function renderFinalResult(data) {
+      document.getElementById("student-id").textContent = data.student_id;
+      document.getElementById("confidence").textContent =
+        Number(data.confidence).toFixed(2);
+      document.getElementById("language").textContent = data.form_language;
+      document.getElementById("source").textContent = data.source;
+
+      if (data.db_debug) {
+        dbDebug.hidden = false;
+        dbDebugText.textContent =
+          `OCR Student ID : ${data.db_debug.ocr_student_id}\n` +
+          `DB host        : ${data.db_debug.db_host}\n` +
+          `DB name        : ${data.db_debug.db_name}\n` +
+          `Table          : ${data.db_debug.table}\n` +
+          `Column         : ${data.db_debug.column}\n` +
+          `Value sent     : ${data.db_debug.sql_param}\n` +
+          `SQL            : ${data.db_debug.sql}\n` +
+          `Lookup result  : ${data.db_debug.lookup_result}` +
+          (data.db_debug.matched_student_id
+            ? `\nMatched ID     : ${data.db_debug.matched_student_id}`
+            : "") +
+          (data.db_debug.error ? `\nError          : ${data.db_debug.error}` : "");
+      }
+
+      dbBadge.hidden = false;
+      if (data.found_in_db && data.student) {
+        statusEl.className = "status ok";
+        statusText.textContent = `Saved — "${data.student_id}" confirmed and marked scanned`;
+        dbBadge.className = "db-badge found";
+        dbBadge.textContent = `Student ID: ${data.student_id} — matched in active_student_data`;
+        document.getElementById("db-name").textContent = data.student.student_name || "—";
+        document.getElementById("db-school").textContent = data.student.school_name || "—";
+        document.getElementById("db-grade").textContent = data.student.grade_name || "—";
+        document.getElementById("db-division").textContent = data.student.division_name || "—";
+        document.getElementById("db-year").textContent = data.student.academic_year || "—";
+        document.getElementById("db-status").textContent = data.student.status || "—";
+        document.getElementById("db-scanned").textContent = data.student.scanned_at || "—";
+        studentCard.hidden = false;
+      } else if (data.db_error) {
+        statusEl.className = "status error";
+        statusText.textContent = `Student ID "${data.student_id}" — database lookup failed`;
+        dbBadge.className = "db-badge missing";
+        dbBadge.textContent = data.db_error;
+        studentCard.hidden = true;
+      } else {
+        statusEl.className = "status error";
+        statusText.textContent =
+          `Student ID "${data.student_id}" was not found in active_student_data.student_id`;
+        dbBadge.className = "db-badge missing";
+        dbBadge.textContent = `Searched for: ${data.student_id}`;
+        studentCard.hidden = true;
+      }
+
+      resultEl.hidden = false;
+    }
+
+    function setSelectedFiles(files, autoSubmit) {
+      selectedFiles = files ? Array.from(files) : [];
+      if (selectedFiles.length > 0) {
+        fileName.hidden = false;
+        fileName.textContent =
+          selectedFiles.length === 1
+            ? selectedFiles[0].name || "Captured photo"
+            : `${selectedFiles.length} files selected: ` +
+              selectedFiles.map((f) => f.name).join(", ");
+        submitBtn.disabled = false;
+        if (autoSubmit) {
+          form.requestSubmit();
+        }
+      } else {
+        fileName.hidden = true;
+        fileName.textContent = "";
+        submitBtn.disabled = true;
+      }
+    }
+
+    cameraInput.addEventListener("change", () => {
+      if (cameraInput.files && cameraInput.files[0]) {
+        setSelectedFiles([cameraInput.files[0]], true);
+      }
+    });
+
+    fileInput.addEventListener("change", () => {
+      if (fileInput.files && fileInput.files.length > 0) {
+        setSelectedFiles(fileInput.files, false);
+      }
+    });
+
+    async function extractOneFile(file) {
+      const body = new FormData();
+      body.append("file", file);
+      // Always use the batch endpoint — a printer/scanner machine may have
+      // batch-scanned a whole stack of forms into one multi-page PDF. A
+      // phone photo or single-page scan just comes back as a 1-page batch.
+      const response = await fetch("/api/extract-batch", { method: "POST", body });
+      const data = await response.json();
+      if (!response.ok) {
+        // Couldn't read this file at all — still surface it as one queue
+        // entry so the user can type the ID in manually or skip it,
+        // instead of silently dropping it from a multi-file batch.
+        return [{ student_id: "", error: `${file.name}: ${data.error}` }];
+      }
+      return data.pages || [];
+    }
+
+    async function loadFilesProgressively(files) {
+      filesLoading = true;
+      for (let i = 0; i < files.length; i += 1) {
+        if (files.length > 1) {
+          statusEl.hidden = false;
+          statusEl.className = "status pending";
+          statusText.textContent = `Reading file ${i + 1} of ${files.length} (${files[i].name})…`;
+        }
+
+        let pages;
+        try {
+          pages = await extractOneFile(files[i]);
+        } catch (error) {
+          pages = [{ student_id: "", error: `${files[i].name}: ${error.message}` }];
+        }
+
+        // Flip this BEFORE appending the last file's pages so the modal
+        // immediately shows an accurate "no more loading" state.
+        if (i === files.length - 1) {
+          filesLoading = false;
+        }
+        appendPages(pages);
+      }
+      maybeFinishIfWaiting();
+    }
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (selectedFiles.length === 0) {
+        statusEl.hidden = false;
+        statusEl.className = "status error";
+        statusText.textContent = "Take a photo or choose file(s) first.";
+        return;
+      }
+
+      resultEl.hidden = true;
+      studentCard.hidden = true;
+      dbBadge.hidden = true;
+      dbDebug.hidden = true;
+      statusEl.hidden = false;
+      statusEl.className = "status pending";
+      statusText.textContent =
+        selectedFiles.length > 1 ? `Reading file 1 of ${selectedFiles.length}…` : "Reading scan…";
+      submitBtn.disabled = true;
+
+      pageQueue = [];
+      pageIndex = 0;
+      batchSummary = { saved: 0, notFound: 0, skipped: 0 };
+      waitingForMore = false;
+
+      // Not awaited on purpose — the first page pops up as soon as it's
+      // ready; remaining files keep loading into the queue in the
+      // background while the user is already confirming earlier pages.
+      loadFilesProgressively(selectedFiles).catch((error) => {
+        filesLoading = false;
+        statusEl.className = "status error";
+        statusText.textContent = error.message;
+        submitBtn.disabled = selectedFiles.length === 0;
+      });
+    });
+
+    // Direct entry — no OCR involved. The typed ID goes straight to the
+    // same /api/confirm endpoint the confirmation modal uses, so it gets
+    // the same fuzzy-repair DB lookup and marks scanned_at the same way.
+    function syncManualSubmitVisibility() {
+      const hasValue = manualInput.value.trim().length > 0;
+      manualSubmitBtn.hidden = !hasValue;
+    }
+
+    manualInput.addEventListener("input", syncManualSubmitVisibility);
+    syncManualSubmitVisibility();
+
+    manualForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const value = manualInput.value.trim().toUpperCase();
+      if (!value) {
+        statusEl.hidden = false;
+        statusEl.className = "status error";
+        statusText.textContent = "Type a Student ID first.";
+        syncManualSubmitVisibility();
+        return;
+      }
+
+      resultEl.hidden = true;
+      studentCard.hidden = true;
+      dbBadge.hidden = true;
+      dbDebug.hidden = true;
+      statusEl.hidden = false;
+      statusEl.className = "status pending";
+      statusText.textContent = "Checking…";
+      manualSubmitBtn.disabled = true;
+      manualInput.disabled = true;
+
+      try {
+        const response = await fetch("/api/confirm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ student_id: value, source: "manual-entry" }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Check failed");
+        renderFinalResult(data);
+        manualInput.value = "";
+      } catch (error) {
+        statusEl.className = "status error";
+        statusText.textContent = error.message;
+      } finally {
+        manualSubmitBtn.disabled = false;
+        manualInput.disabled = false;
+        syncManualSubmitVisibility();
+      }
+    });
+  </script>
+</body>
+</html>
