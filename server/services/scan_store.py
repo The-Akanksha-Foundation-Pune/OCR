@@ -10,7 +10,7 @@ import cv2
 
 from server.config import UPLOAD_FOLDER
 from server.services.debug_log import debug_log
-from server.services.preprocess import load_pages_from_bytes
+from server.services.preprocess import count_pages_from_bytes, load_page_from_bytes
 
 _META_SUFFIX = ".meta"
 
@@ -53,19 +53,18 @@ def page_image_jpeg(scan_id: str, page_number: int = 1) -> tuple[bytes, str] | N
 
     data, filename = loaded
     try:
-        pages = load_pages_from_bytes(data, filename)
+        total = count_pages_from_bytes(data, filename)
+        wanted = max(1, page_number)
+        if wanted > total:
+            wanted = 1
+        # One page, not the whole document - this is called once per form
+        # during confirm, so rendering everything would scale quadratically.
+        image = load_page_from_bytes(data, filename, wanted)
     except Exception as exc:  # noqa: BLE001
         debug_log(f"[SCAN] could not decode scan_id={scan_id!r}: {exc}")
         return None
 
-    if not pages:
-        return None
-
-    index = max(1, page_number) - 1
-    if index >= len(pages):
-        index = 0
-
-    ok, encoded = cv2.imencode(".jpg", pages[index], [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+    ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
     if not ok:
         return None
     return encoded.tobytes(), "jpg"

@@ -1346,3 +1346,791 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+
+/* ===================================================================
+   Scanner controls, live results, and history status
+   Built on the tokens at the top of this file so these sit inside the
+   existing visual language rather than beside it.
+   =================================================================== */
+
+/* ---- location + school pickers -------------------------------------- */
+
+.school-picker {
+  margin: 0 0 1.4rem;
+  padding: 1rem 1.1rem 1.1rem;
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, #fdfcf8 0%, #fbf9f4 100%);
+  animation: fade-up 0.4s var(--ease) both;
+}
+
+.school-label {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.5rem;
+}
+
+.school-label-spaced {
+  margin-top: 1rem;
+}
+
+.location-radios {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.location-option {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.46rem 0.95rem;
+  border: 1.5px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.875rem;
+  font-weight: 550;
+  color: var(--ink);
+  cursor: pointer;
+  background: var(--panel);
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease),
+    box-shadow 0.15s var(--ease), transform 0.15s var(--ease);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.location-option:hover {
+  border-color: #d8cdb3;
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.location-option input {
+  accent-color: var(--accent);
+  margin: 0;
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+.location-option:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-light);
+  color: var(--accent-dark);
+  font-weight: 700;
+}
+
+.location-option:focus-within {
+  box-shadow: 0 0 0 3px rgba(14, 107, 82, 0.16);
+}
+
+.school-select {
+  width: 100%;
+  padding: 0.7rem 2.4rem 0.7rem 0.9rem;
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius-sm);
+  background-color: #fbf9f4;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23667085' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.8rem center;
+  background-size: 1.05rem;
+  font: inherit;
+  font-size: 0.95rem;
+  color: var(--ink);
+  appearance: none;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+
+.school-select:hover {
+  border-color: #d8cdb3;
+}
+
+.school-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(14, 107, 82, 0.14);
+}
+
+.school-hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+/* ---- scan-from-device button ---------------------------------------- */
+
+/* The primary path once a scanner is attached, so it leads the group. */
+.action-btn.scan-btn {
+  width: 100%;
+  font: inherit;
+  /* A <button>, unlike the <label>s beside it, inherits the global button
+     colour - which is white, and vanishes on this light tile. */
+  color: var(--ink);
+  border-color: rgba(14, 107, 82, 0.32);
+  background: linear-gradient(180deg, #f2faf6 0%, var(--accent-light) 100%);
+}
+
+.action-btn.scan-btn .action-icon {
+  background: var(--accent);
+  color: #fff;
+}
+
+.action-btn.scan-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.action-btn.scan-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+  transform: none;
+  box-shadow: none;
+}
+
+/* ---- automatic-check toggle ----------------------------------------- */
+
+.auto-toggle {
+  display: flex;
+  gap: 0.7rem;
+  align-items: flex-start;
+  margin: 1rem 0 1.2rem;
+  padding: 0.85rem 1rem;
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius-md);
+  background: #fbf9f4;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease);
+}
+
+.auto-toggle:hover {
+  border-color: #d8cdb3;
+}
+
+.auto-toggle input {
+  margin-top: 0.12rem;
+  width: 1.1rem;
+  height: 1.1rem;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+}
+
+.auto-toggle-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.auto-toggle-title {
+  font-weight: 650;
+  font-size: 0.94rem;
+}
+
+.auto-toggle-hint {
+  font-size: 0.79rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+/* ---- live results while a batch runs -------------------------------- */
+
+.auto-results {
+  list-style: none;
+  margin: 1.2rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.auto-row {
+  display: grid;
+  grid-template-columns: 4.6rem minmax(7.5rem, auto) 1fr;
+  gap: 0.75rem;
+  align-items: baseline;
+  padding: 0.7rem 0.9rem;
+  border: 1.5px solid var(--line-soft);
+  border-left-width: 3px;
+  border-left-color: var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  font-size: 0.88rem;
+  box-shadow: var(--shadow-sm);
+  animation: fade-up 0.3s var(--ease) both;
+}
+
+.auto-row-page {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-light);
+}
+
+.auto-row-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  word-break: break-all;
+}
+
+.auto-row-detail {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.auto-row.pending {
+  border-left-color: var(--muted-light);
+}
+
+.auto-row.saved {
+  border-left-color: var(--ok);
+  background: var(--ok-bg);
+}
+
+.auto-row.saved .auto-row-detail {
+  color: #14603c;
+}
+
+/* Recovered by fuzzy matching - saved, but worth a look on paper. */
+.auto-row.repaired,
+.auto-row.review {
+  border-left-color: var(--gold);
+  background: var(--gold-light);
+}
+
+.auto-row.notfound {
+  border-left-color: var(--danger);
+  background: var(--danger-bg);
+}
+
+.auto-row.notfound .auto-row-detail {
+  color: #8f2b20;
+}
+
+.auto-row.unread {
+  border-left-color: var(--muted-light);
+  background: #f4f2ec;
+}
+
+/* ---- review controls (kept for the manual review path) --------------- */
+
+.review-question {
+  font-weight: 550;
+  color: var(--ink);
+  margin-bottom: 0.5rem;
+  line-height: 1.45;
+}
+
+.review-controls {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.review-input {
+  width: 11.5rem;
+  padding: 0.4rem 0.6rem;
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.86rem;
+  text-transform: uppercase;
+  background: var(--panel);
+}
+
+.review-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(14, 107, 82, 0.14);
+}
+
+.review-save,
+.review-skip {
+  width: auto;
+  margin-top: 0;
+  padding: 0.42rem 0.85rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.83rem;
+  font-weight: 650;
+  cursor: pointer;
+  border: 1.5px solid var(--accent);
+  transition: filter 0.15s var(--ease);
+}
+
+.review-save {
+  background: var(--accent);
+  color: #fff;
+}
+
+.review-save:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.review-skip {
+  background: var(--panel);
+  border-color: var(--line);
+  color: var(--muted);
+}
+
+.review-save:disabled,
+.review-skip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ---- history filters ------------------------------------------------- */
+
+/* Sits inside .panel, which already supplies the horizontal padding - so
+   this only owns the gap below itself and the rule separating it from the
+   tabs. Adding padding here is what knocked it out of line with the table.
+
+   Location and school each get their own labelled field rather than sharing
+   one row: side by side, an unlabelled pill group next to a bare dropdown
+   reads as two unrelated controls that happen to be adjacent. */
+.history-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  align-items: stretch;
+  margin-bottom: 1.25rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.filter-field .school-label {
+  margin-bottom: 0;
+}
+
+.filter-field-school {
+  max-width: 22rem;
+}
+
+.hist-school {
+  width: 100%;
+  padding: 0.46rem 2.2rem 0.46rem 0.8rem;
+  font-size: 0.88rem;
+  background-size: 0.95rem;
+}
+
+/* ---- "Check" column: read exactly vs needs a look -------------------- */
+
+.check-dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  margin-right: 0.5rem;
+  vertical-align: 0.05rem;
+  flex: 0 0 auto;
+}
+
+.dot-green {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px rgba(31, 138, 87, 0.16);
+}
+
+/* Amber, not red: the row is saved and probably right - it just was not
+   read cleanly, so it is the one to spot-check against the paper. */
+.dot-orange {
+  background: var(--gold);
+  box-shadow: 0 0 0 3px rgba(184, 134, 58, 0.18);
+}
+
+.dot-none {
+  background: #cfd6dc;
+}
+
+/* Wide enough that the sign-off pill sits under the label instead of
+   colliding with the next column. */
+.data-table th:nth-child(6),
+.data-table td:nth-child(6) {
+  min-width: 11rem;
+}
+
+.check-text {
+  vertical-align: middle;
+  font-size: 0.875rem;
+  font-weight: 550;
+}
+
+.check-note {
+  display: block;
+  margin-top: 0.22rem;
+  margin-left: 1rem;
+  font-size: 0.73rem;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+tr.needs-recheck {
+  background: rgba(184, 134, 58, 0.06);
+}
+
+tr.needs-recheck:hover {
+  background: rgba(184, 134, 58, 0.1);
+}
+
+/* ---- Not found: correct and recheck ---------------------------------- */
+
+.row-actions {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.recheck-input {
+  width: 10.5rem;
+  padding: 0.4rem 0.6rem;
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.84rem;
+  text-transform: uppercase;
+  background: #fbf9f4;
+  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+
+.recheck-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(14, 107, 82, 0.14);
+}
+
+.recheck-input:disabled {
+  opacity: 0.55;
+}
+
+.recheck-btn {
+  width: auto;
+  margin-top: 0;
+  padding: 0.42rem 0.8rem;
+  border: 1.5px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.83rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition: filter 0.15s var(--ease);
+}
+
+.recheck-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.recheck-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.recheck-msg {
+  display: block;
+  margin-top: 0.32rem;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.recheck-msg.good {
+  color: var(--ok);
+  font-weight: 650;
+}
+
+.recheck-msg.bad {
+  color: var(--danger);
+}
+
+.recheck-done {
+  font-size: 0.82rem;
+  font-weight: 650;
+  color: var(--ok);
+}
+
+tr.resolved {
+  background: var(--ok-bg);
+}
+
+/* ---- pills used by the not-found table ------------------------------- */
+
+.pill.warn {
+  background: var(--gold-light);
+  color: #7a5312;
+  border: 1px solid rgba(184, 134, 58, 0.35);
+}
+
+.pill.neutral {
+  background: #f0eee8;
+  color: var(--muted);
+}
+
+/* ---- small screens --------------------------------------------------- */
+
+@media (max-width: 720px) {
+  .history-filters {
+    gap: 1rem;
+    align-items: stretch;
+  }
+
+  .filter-field-school {
+    min-width: 0;
+  }
+
+  .hist-school,
+  .recheck-input,
+  .review-input {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .auto-row {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
+  }
+
+  .location-option {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+}
+
+/* ===================================================================
+   Page loader
+   One overlay for the whole page. A single, unmistakable "busy" signal
+   beats several small spinners competing for attention.
+   =================================================================== */
+
+.page-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(246, 243, 236, 0.72);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: loader-in 0.18s var(--ease) both;
+}
+
+@keyframes loader-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.page-loader-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  padding: 2rem 2.6rem;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  animation: fade-up 0.25s var(--ease) both;
+}
+
+.page-loader-ring {
+  width: 2.6rem;
+  height: 2.6rem;
+  border: 3px solid var(--accent-light);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+}
+
+.page-loader-text {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 650;
+  color: var(--ink);
+  text-align: center;
+}
+
+/* Long jobs need more than a spinner. A step count, a progress bar and an
+   elapsed timer answer the three things someone asks while waiting: is it
+   stuck, how far along is it, and how much longer. */
+.page-loader-box {
+  min-width: 17rem;
+  max-width: 24rem;
+}
+
+.page-loader-sub {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--muted);
+  text-align: center;
+}
+
+.page-loader-bar {
+  width: 100%;
+  height: 0.4rem;
+  border-radius: 999px;
+  background: var(--line-soft);
+  overflow: hidden;
+}
+
+.page-loader-fill {
+  display: block;
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent) 0%, #1c8f6e 100%);
+  transition: width 0.35s var(--ease);
+}
+
+/* No total yet - slide back and forth so it never looks frozen. */
+.page-loader-bar.indeterminate .page-loader-fill {
+  width: 35%;
+  animation: loader-slide 1.3s var(--ease) infinite;
+}
+
+@keyframes loader-slide {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(300%); }
+}
+
+.page-loader-elapsed {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-loader-bar.indeterminate .page-loader-fill {
+    animation-duration: 3s;
+  }
+}
+
+/* Nothing behind the overlay should look clickable while it is up. */
+body.is-busy {
+  cursor: progress;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-loader,
+  .page-loader-box {
+    animation: none;
+  }
+
+  .page-loader-ring {
+    animation-duration: 1.6s;
+  }
+}
+
+/* ---- signing off fuzzy matches -------------------------------------- */
+
+.review-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.1rem;
+  padding: 0.75rem 1rem;
+  border: 1.5px solid rgba(184, 134, 58, 0.4);
+  border-radius: var(--radius-md);
+  background: var(--gold-light);
+}
+
+.review-bar-text {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #7a5312;
+}
+
+#review-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.review-all-btn {
+  width: auto;
+  flex: 0 0 auto;
+  margin-top: 0;
+  padding: 0.44rem 0.95rem;
+  border: 1.5px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition: filter 0.15s var(--ease);
+}
+
+.review-all-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+/* Per-row sign-off. Quiet by default so a table of them does not read as a
+   wall of buttons - it firms up on hover. */
+.check-btn {
+  display: inline-block;
+  width: auto;
+  margin-top: 0.35rem;
+  padding: 0.24rem 0.6rem;
+  border: 1.5px solid rgba(184, 134, 58, 0.5);
+  border-radius: 999px;
+  background: transparent;
+  color: #7a5312;
+  font-size: 0.74rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+
+.check-btn:hover:not(:disabled) {
+  background: rgba(184, 134, 58, 0.16);
+  border-color: var(--gold);
+}
+
+.check-btn:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+/* ---- input methods that are switched off --------------------------- */
+
+/* Take photo and Choose file(s) are off while the scanner is the only
+   supported route. The <label>s have had their `for` removed and the file
+   inputs carry `disabled`, so these styles describe that state rather than
+   creating it - a label styled to look dead would still open a file picker. */
+.action-btn.is-disabled {
+  background: #f4f2ed;
+  border-color: var(--line-soft);
+  border-style: dashed;
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+  box-shadow: none;
+  transform: none;
+  animation: none;
+}
+
+.action-btn.is-disabled .action-icon {
+  background: #eceae4;
+  color: var(--muted-light);
+}
+
+.action-btn.is-disabled .action-title {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.action-btn.is-disabled .action-hint {
+  color: var(--muted-light);
+  font-style: italic;
+}

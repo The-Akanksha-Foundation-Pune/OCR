@@ -56,6 +56,38 @@ def load_pages_from_bytes(data: bytes, filename: str) -> list[np.ndarray]:
     return [load_image_from_bytes(data, filename)]
 
 
+def count_pages_from_bytes(data: bytes, filename: str) -> int:
+    """How many pages a scan holds, without rendering any of them."""
+    if Path(filename).suffix.lower() != ".pdf":
+        return 1
+    with fitz.open(stream=data, filetype="pdf") as document:
+        return document.page_count
+
+
+def load_page_from_bytes(data: bytes, filename: str, page_number: int) -> np.ndarray:
+    """
+    Render ONE page (1-based) and nothing else.
+
+    load_pages_from_bytes renders the whole document, which is fine for a
+    handful of forms but quadratic when each page is fetched in its own
+    request - a 500-page batch would render 250,000 pages and hold gigabytes
+    of them in memory at once.
+    """
+    if Path(filename).suffix.lower() != ".pdf":
+        return load_image_from_bytes(data, filename)
+
+    with fitz.open(stream=data, filetype="pdf") as document:
+        if document.page_count < 1:
+            raise ValueError("PDF has no pages")
+        index = page_number - 1
+        if index < 0 or index >= document.page_count:
+            raise ValueError(
+                f"Page {page_number} is outside this scan "
+                f"(it has {document.page_count})"
+            )
+        return _render_page(document[index], 200)
+
+
 def preprocess_for_ocr(image_bgr: np.ndarray) -> np.ndarray:
     """Deskew and enhance a scan for more reliable label detection."""
     if image_bgr is None or image_bgr.size == 0:

@@ -11,6 +11,7 @@ from server.config import (
     ROI_HEIGHT_MULTIPLIER,
     ROI_LEFT_PADDING_RATIO,
     ROI_RIGHT_MULTIPLIER,
+    TEMPLATE_ROI_PAD_RATIO,
     TEMPLATE_VALUE_ROIS,
 )
 from server.services.debug_log import debug_log
@@ -182,15 +183,21 @@ def crop_template_value(image_bgr: np.ndarray, language: str) -> np.ndarray:
     """Crop Student ID value using relative coordinates from blank form templates."""
     if language not in TEMPLATE_VALUE_ROIS:
         raise ValueError(f"No template ROI for language: {language}")
+    return crop_value_roi(image_bgr, TEMPLATE_VALUE_ROIS[language])
 
-    x0, y0, x1, y1 = TEMPLATE_VALUE_ROIS[language]
+
+def crop_value_roi(
+    image_bgr: np.ndarray, roi: tuple[float, float, float, float]
+) -> np.ndarray:
+    """Crop an explicit (x0, y0, x1, y1) ROI given as page fractions."""
+    x0, y0, x1, y1 = roi
     height, width = image_bgr.shape[:2]
     left = int(width * x0)
     right = int(width * x1)
     top = int(height * y0)
     bottom = int(height * y1)
 
-    pad = max(4, int((bottom - top) * 0.8))
+    pad = max(4, int((bottom - top) * TEMPLATE_ROI_PAD_RATIO))
     top = max(0, top - pad)
     bottom = min(height, bottom + pad)
 

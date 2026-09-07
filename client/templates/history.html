@@ -19,6 +19,20 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
 <body>
+    <!-- One loader for the whole page. Anything that waits on the network
+         shows this rather than its own spinner, so there is a single, clear
+         "the app is busy" signal instead of several competing ones. -->
+    <div id="page-loader" class="page-loader" hidden aria-live="polite">
+      <div class="page-loader-box" role="status">
+        <span class="page-loader-ring" aria-hidden="true"></span>
+        <p id="page-loader-text" class="page-loader-text">Loading…</p>
+        <div id="page-loader-bar" class="page-loader-bar indeterminate" hidden>
+          <span id="page-loader-fill" class="page-loader-fill"></span>
+        </div>
+        <p id="page-loader-sub" class="page-loader-sub" hidden></p>
+      </div>
+    </div>
+
   {% include "_nav.html" %}
   <main class="page page-wide">
     <header class="header">
@@ -31,6 +45,47 @@
     </header>
 
     <section class="panel history-panel" aria-label="Scan history">
+      <div class="history-filters">
+        <div class="filter-field">
+          <span class="school-label">Location</span>
+          <div class="location-radios" id="hist-location" role="radiogroup"
+               aria-label="Location">
+            <label class="location-option">
+              <input type="radio" name="hist-location" value="" checked />
+              <span>All</span>
+            </label>
+            <label class="location-option">
+              <input type="radio" name="hist-location" value="Pune" />
+              <span>Pune</span>
+            </label>
+            <label class="location-option">
+              <input type="radio" name="hist-location" value="Mumbai" />
+              <span>Mumbai</span>
+            </label>
+            <label class="location-option">
+              <input type="radio" name="hist-location" value="Nagpur" />
+              <span>Nagpur</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="filter-field filter-field-school">
+          <label for="hist-school" class="school-label">School</label>
+          <select id="hist-school" class="school-select hist-school">
+            <option value="">All schools</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="review-bar" class="review-bar" hidden>
+        <span class="review-bar-text">
+          <span id="review-count">0</span> row(s) need checking against the paper
+        </span>
+        <button type="button" id="review-all-btn" class="review-all-btn">
+          Mark all checked
+        </button>
+      </div>
+
       <div class="tabs" role="tablist">
         <button type="button" class="tab-btn active" data-tab="scanned" role="tab" aria-selected="true">
           Scanned <span id="scanned-count" class="tab-count">—</span>
@@ -64,6 +119,7 @@
                 <th>School</th>
                 <th>Grade</th>
                 <th>Division</th>
+                <th>Check</th>
                 <th>Scanned at</th>
               </tr>
             </thead>
@@ -84,11 +140,11 @@
           <table class="data-table">
             <thead>
               <tr>
-                <th>Student ID entered</th>
+                <th>Student ID read</th>
                 <th>Source</th>
                 <th>Result</th>
                 <th>When</th>
-                <th aria-label="Actions"></th>
+                <th>Correct &amp; recheck</th>
               </tr>
             </thead>
             <tbody id="not-found-body"></tbody>
@@ -140,6 +196,82 @@
     const notFoundEmpty = document.getElementById("not-found-empty");
     const scannedCount = document.getElementById("scanned-count");
     const notFoundCount = document.getElementById("not-found-count");
+    // ---- single page loader ------------------------------------------
+    const pageLoader = document.getElementById("page-loader");
+    const pageLoaderText = document.getElementById("page-loader-text");
+    // Counted rather than a boolean: two overlapping requests must not have
+    // the first one to finish tear the loader away from the second.
+    let loaderDepth = 0;
+
+    const pageLoaderBar = document.getElementById("page-loader-bar");
+    const pageLoaderFill = document.getElementById("page-loader-fill");
+    const pageLoaderSub = document.getElementById("page-loader-sub");
+    let loaderStartedAt = 0;
+    let loaderTimer = null;
+    let loaderNote = "";
+
+    function loaderElapsed() {
+      const seconds = Math.floor((Date.now() - loaderStartedAt) / 1000);
+      if (seconds < 60) return `${seconds}s`;
+      return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+    }
+
+    function paintLoaderSub() {
+      if (!loaderStartedAt) return;
+      const bits = [];
+      if (loaderNote) bits.push(loaderNote);
+      bits.push(`<span class="page-loader-elapsed">${loaderElapsed()} elapsed</span>`);
+      pageLoaderSub.hidden = false;
+      pageLoaderSub.innerHTML = bits.join(" &middot; ");
+    }
+
+    function showLoader(message, note) {
+      loaderDepth += 1;
+      if (message) pageLoaderText.textContent = message;
+      loaderNote = note || "";
+      if (loaderDepth === 1) {
+        // An elapsed counter is the cheapest way to show a long job is
+        // still alive - a static spinner reads as frozen after a minute.
+        loaderStartedAt = Date.now();
+        pageLoaderBar.hidden = false;
+        pageLoaderBar.classList.add("indeterminate");
+        pageLoaderFill.style.width = "";
+        paintLoaderSub();
+        loaderTimer = setInterval(paintLoaderSub, 1000);
+      }
+      pageLoader.hidden = false;
+      document.body.classList.add("is-busy");
+    }
+
+    // Switch from "something is happening" to "step N of M".
+    function updateLoader(message, done, total, note) {
+      if (message) pageLoaderText.textContent = message;
+      if (note !== undefined) loaderNote = note;
+      if (total && total > 0) {
+        pageLoaderBar.hidden = false;
+        pageLoaderBar.classList.remove("indeterminate");
+        pageLoaderFill.style.width =
+          Math.round((Math.min(done, total) / total) * 100) + "%";
+      }
+      paintLoaderSub();
+    }
+
+    function hideLoader() {
+      loaderDepth = Math.max(0, loaderDepth - 1);
+      if (loaderDepth === 0) {
+        pageLoader.hidden = true;
+        document.body.classList.remove("is-busy");
+        pageLoaderBar.hidden = true;
+        pageLoaderSub.hidden = true;
+        loaderNote = "";
+        loaderStartedAt = 0;
+        if (loaderTimer) {
+          clearInterval(loaderTimer);
+          loaderTimer = null;
+        }
+      }
+    }
+
     const searchInput = document.getElementById("search-input");
     const tableStatus = document.getElementById("table-status");
     const prevBtn = document.getElementById("prev-btn");
@@ -162,10 +294,75 @@
       return tab === "scanned" ? "/api/scanned" : "/api/not-found";
     }
 
+    // Location narrows which schools are offered; school narrows the rows.
+    // Both are plain query params, so search and paging keep working.
+    const histLocation = document.getElementById("hist-location");
+    const histSchool = document.getElementById("hist-school");
+    let histSchools = [];
+
+    function histSelectedLocation() {
+      const picked = histLocation.querySelector(
+        "input[name=hist-location]:checked"
+      );
+      return picked ? picked.value : "";
+    }
+
+    function renderHistSchools() {
+      const location = histSelectedLocation();
+      const keep = histSchool.value;
+      const visible = location
+        ? histSchools.filter((entry) => entry.location === location)
+        : histSchools;
+
+      histSchool.innerHTML = "";
+      const blank = document.createElement("option");
+      blank.value = "";
+      blank.textContent = location ? `All ${location} schools` : "All schools";
+      histSchool.appendChild(blank);
+
+      visible.forEach((entry) => {
+        const option = document.createElement("option");
+        option.value = entry.school;
+        option.textContent = location
+          ? entry.school
+          : `${entry.school} \u2014 ${entry.location}`;
+        if (entry.school === keep) option.selected = true;
+        histSchool.appendChild(option);
+      });
+    }
+
+    async function loadHistSchools() {
+      showLoader("Loading schools…");
+      try {
+        const response = await fetch("/api/history-schools");
+        const data = await response.json();
+        if (!response.ok) return;
+        histSchools = data.schools || [];
+        renderHistSchools();
+      } catch (error) {
+        histSchool.innerHTML =
+          '<option value="">Could not load schools</option>';
+      } finally {
+        hideLoader();
+      }
+    }
+
+    histLocation.addEventListener("change", () => {
+      renderHistSchools();
+      page = 1;
+      loadTab();
+    });
+
+    histSchool.addEventListener("change", () => {
+      page = 1;
+      loadTab();
+    });
+
+    loadHistSchools();
+
     async function loadTab() {
-      tableStatus.hidden = false;
-      tableStatus.className = "status pending";
-      tableStatus.textContent = "Loading…";
+      tableStatus.hidden = true;
+      showLoader("Loading scan history…");
 
       const params = new URLSearchParams({
         page: String(page),
@@ -173,6 +370,12 @@
       });
       const search = searchInput.value.trim();
       if (search) params.set("search", search);
+      const school = histSchool ? histSchool.value : "";
+      if (school) params.set("school", school);
+      // Sent even when a school is chosen; the server prefers the school and
+      // falls back to the whole city when it is left on "All".
+      const location = histSelectedLocation();
+      if (location) params.set("location", location);
 
       try {
         const response = await fetch(`${apiForTab(activeTab)}?${params.toString()}`);
@@ -187,25 +390,72 @@
       } catch (error) {
         tableStatus.className = "status error";
         tableStatus.textContent = error.message;
+        (activeTab === "scanned" ? scannedBody : notFoundBody).innerHTML = "";
+      } finally {
+        hideLoader();
       }
     }
 
     function renderRows(items) {
       if (activeTab === "scanned") {
+        // A save recovered by fuzzy matching is not wrong, but it is a
+        // guess the software made rather than a character it actually read.
+        // Flagging those lets someone spot-check them against the paper
+        // afterwards, instead of stopping the scan to ask about each one.
+        const EXACT_WAYS = ["exact", "shape_fix"];
+
+        function needsRecheck(row) {
+          const via = (row.matched_via || "").toLowerCase();
+          return via !== "" && !EXACT_WAYS.includes(via);
+        }
+
+        function rowClass(row) {
+          return needsRecheck(row) && !row.reviewed_at ? "needs-recheck" : "";
+        }
+
+        function checkCell(row) {
+          if (!row.matched_via) {
+            return '<span class="check-dot dot-none"></span>' +
+              '<span class="check-text">\u2014</span>';
+          }
+          if (!needsRecheck(row)) {
+            return '<span class="check-dot dot-green"></span>' +
+              '<span class="check-text">Read exactly</span>';
+          }
+          // Signed off by a person: still green, but labelled differently
+          // from a clean read - one was verified, the other never needed to be.
+          if (row.reviewed_at) {
+            const by = escapeHtml(row.reviewed_by || "");
+            return '<span class="check-dot dot-green"></span>' +
+              '<span class="check-text">Checked</span>' +
+              (by ? `<span class="check-note">by ${by}</span>` : "");
+          }
+          const read = escapeHtml(row.ocr_read || "");
+          const note = read && read !== row.student_id
+            ? `<span class="check-note">read as ${read}</span>`
+            : "";
+          return '<span class="check-dot dot-orange"></span>' +
+            '<span class="check-text">Recheck needed</span>' + note +
+            `<button type="button" class="check-btn" data-id="${escapeHtml(row.student_id)}">` +
+            "Mark checked</button>";
+        }
+
         scannedBody.innerHTML = items
           .map(
             (row) => `
-              <tr>
+              <tr class="${rowClass(row)}">
                 <td class="mono">${escapeHtml(row.student_id)}</td>
                 <td>${escapeHtml(row.student_name) || "—"}</td>
                 <td>${escapeHtml(row.school_name) || "—"}</td>
                 <td>${escapeHtml(row.grade_name) || "—"}</td>
                 <td>${escapeHtml(row.division_name) || "—"}</td>
+                <td>${checkCell(row)}</td>
                 <td>${escapeHtml(row.scanned_at) || "—"}</td>
               </tr>`
           )
           .join("");
         scannedEmpty.hidden = items.length !== 0;
+        refreshReviewBar(items);
       } else {
         notFoundBody.innerHTML = items
           .map(
@@ -213,12 +463,29 @@
               <tr data-id="${row.id}">
                 <td class="mono">${escapeHtml(row.confirmed_student_id)}</td>
                 <td>${escapeHtml(row.source) || "—"}</td>
-                <td><span class="pill missing">Not found</span></td>
+                <td>
+                  <span class="pill missing">Not found</span>
+                  <span class="recheck-msg" hidden></span>
+                </td>
                 <td>${escapeHtml(row.created_at)}</td>
                 <td>
-                  <button type="button" class="delete-btn" data-id="${row.id}" title="Delete this entry">
-                    Delete
-                  </button>
+                  <div class="row-actions">
+                    <input
+                      type="text"
+                      class="recheck-input"
+                      value="${escapeHtml(row.confirmed_student_id)}"
+                      aria-label="Corrected Student ID"
+                      autocomplete="off"
+                      autocapitalize="characters"
+                      spellcheck="false"
+                    />
+                    <button type="button" class="recheck-btn" data-id="${row.id}">
+                      Recheck
+                    </button>
+                    <button type="button" class="delete-btn" data-id="${row.id}" title="Delete this entry">
+                      Delete
+                    </button>
+                  </div>
                 </td>
               </tr>`
           )
@@ -226,6 +493,64 @@
         notFoundEmpty.hidden = items.length !== 0;
       }
     }
+
+    // ---- signing off fuzzy matches ------------------------------------
+    const reviewBar = document.getElementById("review-bar");
+    const reviewCount = document.getElementById("review-count");
+    const reviewAllBtn = document.getElementById("review-all-btn");
+
+    function refreshReviewBar(items) {
+      if (activeTab !== "scanned") {
+        reviewBar.hidden = true;
+        return;
+      }
+      const pending = (items || []).filter(
+        (row) => row.matched_via &&
+          !["exact", "shape_fix"].includes((row.matched_via || "").toLowerCase()) &&
+          !row.reviewed_at
+      ).length;
+      reviewCount.textContent = pending;
+      reviewBar.hidden = pending === 0;
+    }
+
+    async function markChecked(studentIds, all) {
+      const body = all
+        ? {
+            all: true,
+            school: histSchool ? histSchool.value : "",
+            location: histSelectedLocation(),
+          }
+        : { student_ids: studentIds };
+
+      showLoader(all ? "Marking all checked\u2026" : "Marking checked\u2026");
+      try {
+        const response = await fetch("/api/scanned/review", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Could not mark as checked.");
+        // Reload rather than patching the DOM: the reviewed_at value comes
+        // from the server, and guessing it here would drift from the truth.
+        await loadTab();
+      } catch (error) {
+        tableStatus.hidden = false;
+        tableStatus.className = "status error";
+        tableStatus.textContent = error.message;
+      } finally {
+        hideLoader();
+      }
+    }
+
+    reviewAllBtn.addEventListener("click", () => markChecked([], true));
+
+    scannedBody.addEventListener("click", (event) => {
+      const button = event.target.closest(".check-btn");
+      if (!button) return;
+      button.disabled = true;
+      markChecked([button.dataset.id], false);
+    });
 
     const deleteModal = document.getElementById("delete-modal");
     const deleteModalId = document.getElementById("delete-modal-id");
@@ -260,7 +585,7 @@
       const { id, row } = pendingDelete;
       deleteConfirmBtn.disabled = true;
       deleteCancelBtn.disabled = true;
-      deleteConfirmBtn.textContent = "Deleting…";
+      showLoader("Deleting entry…");
 
       try {
         const response = await fetch(`/api/not-found/${id}`, { method: "DELETE" });
@@ -285,7 +610,73 @@
       }
     });
 
+    // Recheck: the OCR reading is often close but not exact, so let someone
+    // read the ID off the paper, correct it here, and look it up again. A
+    // hit marks the student scanned and drops the row off this list.
+    async function recheckRow(button) {
+      const row = button.closest("tr");
+      const input = row.querySelector(".recheck-input");
+      const message = row.querySelector(".recheck-msg");
+      const value = (input.value || "").trim().toUpperCase();
+      if (!value) {
+        message.hidden = false;
+        message.className = "recheck-msg bad";
+        message.textContent = "Enter a Student ID.";
+        return;
+      }
+
+      button.disabled = true;
+      input.disabled = true;
+      message.hidden = true;
+      showLoader("Checking Student ID…");
+
+      try {
+        const response = await fetch(`/api/not-found/${button.dataset.id}/recheck`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ student_id: value }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Recheck failed");
+
+        if (data.found) {
+          const student = data.student || {};
+          row.classList.add("resolved");
+          row.querySelector(".pill").className = "pill ok";
+          row.querySelector(".pill").textContent = "Found";
+          message.className = "recheck-msg good";
+          message.textContent =
+            `${student.student_id} · ${student.student_name || ""}`;
+          row.querySelector(".row-actions").innerHTML =
+            '<span class="recheck-done">Saved — marked as scanned</span>';
+          notFoundCount.textContent = Math.max(
+            0,
+            (parseInt(notFoundCount.textContent, 10) || 1) - 1
+          );
+        } else {
+          message.hidden = false;
+          message.className = "recheck-msg bad";
+          message.textContent = data.message || "Still no match.";
+          button.disabled = false;
+          input.disabled = false;
+        }
+      } catch (error) {
+        message.hidden = false;
+        message.className = "recheck-msg bad";
+        message.textContent = error.message;
+        button.disabled = false;
+        input.disabled = false;
+      } finally {
+        hideLoader();
+      }
+    }
+
     notFoundBody.addEventListener("click", (event) => {
+      const recheckBtn = event.target.closest(".recheck-btn");
+      if (recheckBtn) {
+        recheckRow(recheckBtn);
+        return;
+      }
       const deleteBtn = event.target.closest(".delete-btn");
       if (!deleteBtn) return;
       const row = deleteBtn.closest("tr");

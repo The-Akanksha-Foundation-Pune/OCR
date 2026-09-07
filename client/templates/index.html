@@ -19,21 +19,78 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
 <body>
+    <!-- One loader for the whole page. Anything that waits on the network
+         shows this rather than its own spinner, so there is a single, clear
+         "the app is busy" signal instead of several competing ones. -->
+    <div id="page-loader" class="page-loader" hidden aria-live="polite">
+      <div class="page-loader-box" role="status">
+        <span class="page-loader-ring" aria-hidden="true"></span>
+        <p id="page-loader-text" class="page-loader-text">Loading…</p>
+        <div id="page-loader-bar" class="page-loader-bar indeterminate" hidden>
+          <span id="page-loader-fill" class="page-loader-fill"></span>
+        </div>
+        <p id="page-loader-sub" class="page-loader-sub" hidden></p>
+      </div>
+    </div>
+
   {% include "_nav.html" %}
   <main class="page">
     <header class="header">
       <p class="brand">Akanksha Form OCR</p>
       <h1>Extract Student ID</h1>
       <p class="lede">
-        Prefer <strong>Take photo</strong>. Capture the <strong>full first page</strong>
-        so the Student ID line is visible (IDs look like <strong>MOHSHA011021</strong>).
-      </p>
+        Pick the location and school, load page 1 of each form face down in the
+        scanner, then press <strong>Scan now</strong>.</p>
     </header>
 
     <section class="panel" aria-label="Upload scan">
       <form id="upload-form">
+        <div class="school-picker">
+          <span class="school-label">Location</span>
+          <div class="location-radios" id="location-radios" role="radiogroup"
+               aria-label="Location">
+            <label class="location-option">
+              <input type="radio" name="location" value="Pune" checked />
+              <span>Pune</span>
+            </label>
+            <label class="location-option">
+              <input type="radio" name="location" value="Mumbai" />
+              <span>Mumbai</span>
+            </label>
+            <label class="location-option">
+              <input type="radio" name="location" value="Nagpur" />
+              <span>Nagpur</span>
+            </label>
+          </div>
+
+          <label for="school-select" class="school-label school-label-spaced">
+            School being scanned
+          </label>
+          <select id="school-select" class="school-select">
+            <option value="">Loading schools…</option>
+          </select>
+          <p class="school-hint">
+            Narrows the lookup to this school's students, so a misread ID cannot
+            match a child at another school.
+          </p>
+        </div>
+
         <div class="action-grid">
-          <label class="action-btn camera-btn" for="camera-input">
+          <button type="button" class="action-btn scan-btn" id="scan-btn">
+            <span class="action-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M4 8V6.5A1.5 1.5 0 0 1 5.5 5H8M16 5h2.5A1.5 1.5 0 0 1 20 6.5V8M20 16v1.5a1.5 1.5 0 0 1-1.5 1.5H16M8 19H5.5A1.5 1.5 0 0 1 4 17.5V16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                <path d="M3.5 12h17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+              </svg>
+            </span>
+            <span class="action-text">
+              <span class="action-title">Scan now</span>
+              <span class="action-hint">Pulls the stack from the scanner</span>
+            </span>
+          </button>
+
+          <label class="action-btn camera-btn is-disabled" aria-disabled="true"
+                 title="Use the scanner instead">
             <span class="action-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M4 8.5A2 2 0 0 1 6 6.5h1.6l.7-1.4A1.5 1.5 0 0 1 9.6 4.3h4.8a1.5 1.5 0 0 1 1.3.8l.7 1.4H18a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
@@ -42,18 +99,20 @@
             </span>
             <span class="action-text">
               <span class="action-title">Take photo</span>
-              <span class="action-hint">Opens phone camera</span>
+              <span class="action-hint">Turned off — use the scanner</span>
             </span>
           </label>
           <input
             id="camera-input"
             class="sr-only"
             type="file"
+            disabled
             accept="image/*"
             capture="environment"
           />
 
-          <label class="action-btn file-btn" for="file-input">
+          <label class="action-btn file-btn is-disabled" aria-disabled="true"
+                 title="Use the scanner instead">
             <span class="action-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M8 3.5h5.5L18 8v10.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 18.5V5A1.5 1.5 0 0 1 8 3.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
@@ -62,7 +121,7 @@
             </span>
             <span class="action-text">
               <span class="action-title">Choose file(s)</span>
-              <span class="action-hint">CamScanner JPG/PDF — pick several at once</span>
+              <span class="action-hint">Turned off — use the scanner</span>
             </span>
           </label>
           <input
@@ -70,14 +129,29 @@
             class="sr-only"
             name="file"
             type="file"
+            disabled
             multiple
             accept=".jpg,.jpeg,.png,.pdf,image/*,application/pdf"
           />
         </div>
 
         <p id="file-name" class="file-name" hidden></p>
-        <button type="submit" id="submit-btn" disabled>Extract Student ID</button>
+
+        <label class="auto-toggle" for="auto-mode">
+          <input type="checkbox" id="auto-mode" checked />
+          <span class="auto-toggle-text">
+            <span class="auto-toggle-title">Check each form automatically</span>
+            <span class="auto-toggle-hint">
+              Every page is looked up and saved as it is read. Turn this off to
+              review each Student ID against the paper before saving.
+            </span>
+          </span>
+        </label>
+
+        <button type="submit" id="submit-btn" disabled hidden>Extract Student ID</button>
       </form>
+
+      <ol id="auto-results" class="auto-results" hidden></ol>
 
       <div class="divider"><span>or</span></div>
 
@@ -137,34 +211,40 @@
         <div class="step-card">
           <span class="step-num" aria-hidden="true">1</span>
           <div>
-            <p class="step-title">Take a photo</p>
-            <p class="step-text">Camera opens, and extraction starts automatically.</p>
+            <p class="step-title">Pick the location and school</p>
+            <p class="step-text">
+              The lookup is limited to that school, so a misread ID cannot match
+              a child somewhere else.
+            </p>
           </div>
         </div>
         <div class="step-card">
           <span class="step-num" aria-hidden="true">2</span>
           <div>
-            <p class="step-title">Capture the full page</p>
-            <p class="step-text">Keep the Student ID line sharp, close, and well lit.</p>
+            <p class="step-title">Load page 1 of each form</p>
+            <p class="step-text">
+              Face down, top edge first, into the feeder at the back — push until
+              the rollers grip. Up to 50 sheets.
+            </p>
           </div>
         </div>
         <div class="step-card">
           <span class="step-num" aria-hidden="true">3</span>
           <div>
-            <p class="step-title">Already use CamScanner? (optional)</p>
+            <p class="step-title">Press Scan now</p>
             <p class="step-text">
-              Scan with the CamScanner app → export as JPG/PDF → come back here
-              and tap <strong>Choose file(s)</strong> to upload it.
+              Each form is read and saved as it comes through, about four seconds
+              a sheet. Results appear as they go.
             </p>
           </div>
         </div>
         <div class="step-card">
           <span class="step-num" aria-hidden="true">4</span>
           <div>
-            <p class="step-title">Scanning many forms?</p>
+            <p class="step-title">Check the orange rows</p>
             <p class="step-text">
-              Select them all at once — every page from every file gets queued up
-              for you to confirm, one at a time.
+              In History, green means read exactly. Orange was recovered by
+              matching — compare those against the paper, then mark them checked.
             </p>
           </div>
         </div>
@@ -234,7 +314,88 @@
     const dbDebug = document.getElementById("db-debug");
     const dbDebugText = document.getElementById("db-debug-text");
 
+    // ---- single page loader ------------------------------------------
+    const pageLoader = document.getElementById("page-loader");
+    const pageLoaderText = document.getElementById("page-loader-text");
+    // Counted rather than a boolean: two overlapping requests must not have
+    // the first one to finish tear the loader away from the second.
+    let loaderDepth = 0;
+
+    const pageLoaderBar = document.getElementById("page-loader-bar");
+    const pageLoaderFill = document.getElementById("page-loader-fill");
+    const pageLoaderSub = document.getElementById("page-loader-sub");
+    let loaderStartedAt = 0;
+    let loaderTimer = null;
+    let loaderNote = "";
+
+    function loaderElapsed() {
+      const seconds = Math.floor((Date.now() - loaderStartedAt) / 1000);
+      if (seconds < 60) return `${seconds}s`;
+      return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+    }
+
+    function paintLoaderSub() {
+      if (!loaderStartedAt) return;
+      const bits = [];
+      if (loaderNote) bits.push(loaderNote);
+      bits.push(`<span class="page-loader-elapsed">${loaderElapsed()} elapsed</span>`);
+      pageLoaderSub.hidden = false;
+      pageLoaderSub.innerHTML = bits.join(" &middot; ");
+    }
+
+    function showLoader(message, note) {
+      loaderDepth += 1;
+      if (message) pageLoaderText.textContent = message;
+      loaderNote = note || "";
+      if (loaderDepth === 1) {
+        // An elapsed counter is the cheapest way to show a long job is
+        // still alive - a static spinner reads as frozen after a minute.
+        loaderStartedAt = Date.now();
+        pageLoaderBar.hidden = false;
+        pageLoaderBar.classList.add("indeterminate");
+        pageLoaderFill.style.width = "";
+        paintLoaderSub();
+        loaderTimer = setInterval(paintLoaderSub, 1000);
+      }
+      pageLoader.hidden = false;
+      document.body.classList.add("is-busy");
+    }
+
+    // Switch from "something is happening" to "step N of M".
+    function updateLoader(message, done, total, note) {
+      if (message) pageLoaderText.textContent = message;
+      if (note !== undefined) loaderNote = note;
+      if (total && total > 0) {
+        pageLoaderBar.hidden = false;
+        pageLoaderBar.classList.remove("indeterminate");
+        pageLoaderFill.style.width =
+          Math.round((Math.min(done, total) / total) * 100) + "%";
+      }
+      paintLoaderSub();
+    }
+
+    function hideLoader() {
+      loaderDepth = Math.max(0, loaderDepth - 1);
+      if (loaderDepth === 0) {
+        pageLoader.hidden = true;
+        document.body.classList.remove("is-busy");
+        pageLoaderBar.hidden = true;
+        pageLoaderSub.hidden = true;
+        loaderNote = "";
+        loaderStartedAt = 0;
+        if (loaderTimer) {
+          clearInterval(loaderTimer);
+          loaderTimer = null;
+        }
+      }
+    }
+
     const confirmModal = document.getElementById("confirm-modal");
+    const autoModeInput = document.getElementById("auto-mode");
+    const autoResults = document.getElementById("auto-results");
+    const scanBtn = document.getElementById("scan-btn");
+    const schoolSelect = document.getElementById("school-select");
+    const locationRadios = document.getElementById("location-radios");
     const modalPageInfo = document.getElementById("modal-page-info");
     const modalLoading = document.getElementById("modal-loading");
     const confirmInput = document.getElementById("confirm-input");
@@ -253,7 +414,7 @@
     // so the confirm modal walks through them one at a time.
     let pageQueue = [];
     let pageIndex = 0;
-    let batchSummary = { saved: 0, notFound: 0, skipped: 0 };
+    let batchSummary = { saved: 0, notFound: 0, skipped: 0, review: 0 };
     // True while files are still being read in the background — lets the
     // very first page pop up as soon as it's ready, instead of waiting for
     // every selected file to finish OCR first.
@@ -261,6 +422,8 @@
     // True once the user has confirmed/skipped their way to the end of the
     // pages we know about so far, but more files are still loading.
     let waitingForMore = false;
+    // True while the automatic loop is walking the queue.
+    let autoRunning = false;
 
     function showCurrentPage() {
       const total = pageQueue.length;
@@ -319,10 +482,244 @@
       confirmModal.hidden = false;
     }
 
+    // ---- automatic mode -------------------------------------------------
+    // One form at a time: look it up, save it if it matches, and move on.
+    // A page that does not match is logged and shows up under History >
+    // Not found, where its ID can be corrected and rechecked.
+
+    function autoModeOn() {
+      return autoModeInput.checked;
+    }
+
+    function addAutoRow(page) {
+      const row = document.createElement("li");
+      row.className = "auto-row pending";
+      row.innerHTML =
+        '<span class="auto-row-page"></span>' +
+        '<span class="auto-row-id"></span>' +
+        '<span class="auto-row-detail">Checking database…</span>';
+      row.querySelector(".auto-row-page").textContent =
+        "Page " + (page.page_number || autoResults.children.length + 1);
+      row.querySelector(".auto-row-id").textContent = page.student_id || "unreadable";
+      autoResults.hidden = false;
+      autoResults.appendChild(row);
+      return row;
+    }
+
+    function fillAutoRow(row, state, id, detail) {
+      row.className = "auto-row " + state;
+      row.querySelector(".auto-row-id").textContent = id;
+      row.querySelector(".auto-row-detail").textContent = detail;
+    }
+
+    async function autoProcessPage(page, position) {
+      const row = addAutoRow(page);
+
+      if (!page.student_id) {
+        // Nothing was read, so there is nothing to look up. Left for the
+        // operator rather than guessed at.
+        fillAutoRow(
+          row,
+          "unread",
+          "unreadable",
+          page.error || "Could not read an ID - enter it manually below."
+        );
+        batchSummary.skipped += 1;
+        return;
+      }
+
+      try {
+        const response = await fetch("/api/confirm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            student_id: page.student_id,
+            scan_id: page.scan_id || "",
+            page_number: page.page_number || position + 1,
+            school: selectedSchool(),
+            location: selectedLocation(),
+            auto: true,
+          }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Lookup failed");
+
+        if (data.found_in_db) {
+          const student = data.student || {};
+          const read = data.ocr_student_id || "";
+          const repaired = (student.matched_via || "") !== "exact";
+          fillAutoRow(
+            row,
+            repaired ? "repaired" : "saved",
+            student.student_id || data.student_id,
+            (student.student_name || "Saved") +
+              (student.school_name ? " · " + student.school_name : "") +
+              (repaired && read && read !== student.student_id
+                ? " · read as " + read
+                : "")
+          );
+          batchSummary.saved += 1;
+        } else {
+          fillAutoRow(
+            row,
+            "notfound",
+            data.student_id,
+            "Not in database - sent to History > Not found"
+          );
+          batchSummary.notFound += 1;
+        }
+      } catch (error) {
+        fillAutoRow(row, "unread", page.student_id, error.message);
+        batchSummary.skipped += 1;
+      }
+    }
+
+    // A proposed-but-unsaved match. Shows what was read next to who the
+    // database thinks it is, and saves nothing until someone says so - the
+    // two IDs side by side are what makes a wrong guess obvious.
+    function renderReviewRow(row, page, position, data) {
+      const student = data.student || {};
+      const read = data.ocr_student_id || page.student_id || "";
+      row.className = "auto-row review";
+      row.querySelector(".auto-row-id").textContent = read;
+      const detail = row.querySelector(".auto-row-detail");
+      detail.innerHTML = "";
+
+      const question = document.createElement("div");
+      question.className = "review-question";
+      question.textContent =
+        "Read " + read + " — closest match is " +
+        (student.student_id || "?") + " (" + (student.student_name || "") + ")" +
+        (student.school_name ? " · " + student.school_name : "");
+      detail.appendChild(question);
+
+      const controls = document.createElement("div");
+      controls.className = "review-controls";
+
+      const field = document.createElement("input");
+      field.type = "text";
+      field.className = "review-input";
+      field.value = student.student_id || read;
+      field.setAttribute("aria-label", "Student ID to save");
+
+      const save = document.createElement("button");
+      save.type = "button";
+      save.className = "review-save";
+      save.textContent = "Confirm & save";
+
+      const skip = document.createElement("button");
+      skip.type = "button";
+      skip.className = "review-skip";
+      skip.textContent = "Skip";
+
+      save.addEventListener("click", async () => {
+        const value = (field.value || "").trim().toUpperCase();
+        if (!value) return;
+        save.disabled = true;
+        skip.disabled = true;
+        field.disabled = true;
+        try {
+          const response = await fetch("/api/confirm", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              student_id: value,
+              scan_id: page.scan_id || "",
+              page_number: page.page_number || position + 1,
+              school: selectedSchool(),
+              location: selectedLocation(),
+            }),
+          });
+          const saved = await response.json();
+          if (!response.ok) throw new Error(saved.error || "Save failed");
+          if (saved.found_in_db) {
+            const matched = saved.student || {};
+            fillAutoRow(
+              row,
+              "saved",
+              matched.student_id || value,
+              (matched.student_name || "Saved") +
+                (matched.school_name ? " · " + matched.school_name : "")
+            );
+            batchSummary.saved += 1;
+          } else {
+            fillAutoRow(
+              row,
+              "notfound",
+              value,
+              "Not in database - sent to History > Not found"
+            );
+            batchSummary.notFound += 1;
+          }
+          batchSummary.review -= 1;
+        } catch (error) {
+          save.disabled = false;
+          skip.disabled = false;
+          field.disabled = false;
+          question.textContent = error.message;
+        }
+      });
+
+      skip.addEventListener("click", () => {
+        fillAutoRow(row, "unread", read, "Skipped - nothing saved.");
+        batchSummary.review -= 1;
+        batchSummary.skipped += 1;
+      });
+
+      controls.appendChild(field);
+      controls.appendChild(save);
+      controls.appendChild(skip);
+      detail.appendChild(controls);
+    }
+
+    async function autoProcessQueue() {
+      while (pageIndex < pageQueue.length) {
+        const page = pageQueue[pageIndex];
+        const position = pageIndex;
+        pageIndex += 1;
+        statusEl.hidden = false;
+        statusEl.className = "status pending";
+        statusText.textContent =
+          "Checking page " + (position + 1) + " of " + pageQueue.length +
+          (filesLoading ? "+" : "") + "…";
+        await autoProcessPage(page, position);
+      }
+
+      if (filesLoading) {
+        // Caught up with what has been read so far; the loop restarts when
+        // appendPages delivers more.
+        waitingForMore = true;
+        return;
+      }
+      waitingForMore = false;
+      autoRunning = false;
+      finishBatch();
+    }
+
+    function startAutoIfIdle() {
+      if (autoRunning) return;
+      autoRunning = true;
+      waitingForMore = false;
+      autoProcessQueue().catch((error) => {
+        autoRunning = false;
+        statusEl.className = "status error";
+        statusText.textContent = error.message;
+        submitBtn.disabled = selectedFiles.length === 0;
+      });
+    }
+
     function appendPages(newPages) {
       if (!newPages || newPages.length === 0) return;
       const hadNothingYet = pageQueue.length === 0;
       pageQueue.push(...newPages);
+
+      if (autoModeOn()) {
+        // No modal in automatic mode - each page is looked up as it lands,
+        // including pages that arrive while the loop is already running.
+        if (hadNothingYet) pageIndex = 0;
+        startAutoIfIdle();
+        return;
+      }
 
       if (hadNothingYet) {
         pageIndex = 0;
@@ -366,6 +763,15 @@
     }
 
     function maybeFinishIfWaiting() {
+      if (autoModeOn()) {
+        // The last file has finished reading, so let the loop drain the
+        // rest of the queue and close the batch out.
+        if (waitingForMore || autoRunning) {
+          autoRunning = false;
+          startAutoIfIdle();
+        }
+        return;
+      }
       if (waitingForMore && pageIndex >= pageQueue.length) {
         waitingForMore = false;
         closeConfirmModal();
@@ -375,9 +781,10 @@
 
     function finishBatch() {
       submitBtn.disabled = selectedFiles.length === 0;
+
       const total = pageQueue.length;
 
-      if (total <= 1) {
+      if (total <= 1 && !autoModeOn()) {
         // Single-page: a successful confirm already shows its own result
         // via renderFinalResult below — only a skip/cancel needs a note here.
         if (batchSummary.skipped >= 1) {
@@ -392,7 +799,10 @@
       statusEl.className = "status ok";
       statusText.textContent =
         `Batch done — ${total} page(s): ${batchSummary.saved} saved, ` +
-        `${batchSummary.notFound} not found, ${batchSummary.skipped} skipped.`;
+        `${batchSummary.notFound} not found, ${batchSummary.skipped} skipped` +
+        (batchSummary.review > 0
+          ? `, ${batchSummary.review} waiting for you to check.`
+          : `.`);
     }
 
     async function confirmAndSave() {
@@ -417,6 +827,8 @@
             student_id: value,
             scan_id: page.scan_id || "",
             page_number: page.page_number || pageIndex + 1,
+            school: selectedSchool(),
+            location: selectedLocation(),
           }),
         });
         const data = await response.json();
@@ -574,6 +986,243 @@
       maybeFinishIfWaiting();
     }
 
+    // The chosen school is remembered per browser - a school administrator
+    // scans the same school's forms every time, and re-picking it each
+    // morning is one more chance to get it wrong.
+    const SCHOOL_KEY = "ocr.school";
+    const LOCATION_KEY = "ocr.location";
+    let allSchools = [];
+
+    function selectedSchool() {
+      return (schoolSelect && schoolSelect.value) || "";
+    }
+
+    function selectedLocation() {
+      const picked = locationRadios.querySelector("input[name=location]:checked");
+      return picked ? picked.value : "";
+    }
+
+    function remember(key, value) {
+      try {
+        localStorage.setItem(key, value);
+      } catch (error) {
+        /* private browsing - the pickers still work for this session */
+      }
+    }
+
+    function recall(key) {
+      try {
+        return localStorage.getItem(key) || "";
+      } catch (error) {
+        return "";
+      }
+    }
+
+    // Rebuild the school list for the chosen city. Keeps the current school
+    // selected when it belongs to that city, so switching back and forth
+    // does not silently change which school you are scanning for.
+    function renderSchoolOptions(keep) {
+      const location = selectedLocation();
+      const visible = location
+        ? allSchools.filter((entry) => entry.location === location)
+        : allSchools;
+
+      schoolSelect.innerHTML = "";
+      const blank = document.createElement("option");
+      blank.value = "";
+      blank.textContent = location
+        ? `All ${location} schools`
+        : "Select a school";
+      schoolSelect.appendChild(blank);
+
+      visible.forEach((entry) => {
+        const option = document.createElement("option");
+        option.value = entry.school;
+        option.textContent = entry.school;
+        if (entry.school === keep) option.selected = true;
+        schoolSelect.appendChild(option);
+      });
+    }
+
+    async function loadSchools() {
+      showLoader("Loading schools\u2026");
+      try {
+        const response = await fetch("/api/schools");
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Could not load schools");
+
+        allSchools = data.schools || [];
+
+        const savedLocation = recall(LOCATION_KEY) || "Pune";
+        const radio = locationRadios.querySelector(
+          `input[name=location][value="${savedLocation}"]`
+        );
+        if (radio) {
+          radio.checked = true;
+        } else {
+          const first = locationRadios.querySelector("input[name=location]");
+          if (first) first.checked = true;
+        }
+
+        renderSchoolOptions(recall(SCHOOL_KEY));
+      } catch (error) {
+        schoolSelect.innerHTML =
+          '<option value="">Could not load schools</option>';
+      } finally {
+        hideLoader();
+      }
+    }
+
+    locationRadios.addEventListener("change", () => {
+      remember(LOCATION_KEY, selectedLocation());
+      renderSchoolOptions(recall(SCHOOL_KEY));
+      remember(SCHOOL_KEY, selectedSchool());
+    });
+
+    schoolSelect.addEventListener("change", () => {
+      remember(SCHOOL_KEY, schoolSelect.value);
+    });
+
+    loadSchools();
+
+    function resetBatchState() {
+      resultEl.hidden = true;
+      studentCard.hidden = true;
+      dbBadge.hidden = true;
+      dbDebug.hidden = true;
+      pageQueue = [];
+      pageIndex = 0;
+      batchSummary = { saved: 0, notFound: 0, skipped: 0, review: 0 };
+      waitingForMore = false;
+      autoRunning = false;
+      autoResults.innerHTML = "";
+      autoResults.hidden = true;
+    }
+
+    // Scan straight from the attached scanner. Same downstream path as an
+    // uploaded PDF - the server hands back the identical page list, so the
+    // automatic loop below does not need to know where the pages came from.
+    async function scanNow() {
+      resetBatchState();
+      scanBtn.disabled = true;
+      submitBtn.disabled = true;
+      showLoader(
+        "Starting the scanner\u2026",
+        "Reading begins as soon as the first sheet is through."
+      );
+
+      let jobId = null;
+      try {
+        const started = await fetch("/api/scan/start", { method: "POST" });
+        const startData = await started.json();
+        if (!started.ok) throw new Error(startData.error || "Scan failed");
+        jobId = startData.job_id;
+
+        filesLoading = true;
+        let read = 0;      // pages OCR'd so far
+        let ready = 0;     // pages the scanner has captured
+        let finished = false;
+        let scanError = null;
+
+        // Poll for captured pages and read each one the moment it appears,
+        // rather than waiting for the whole stack. Feeding is the slow part,
+        // so this overlaps the two and results start showing within seconds.
+        while (!finished || read < ready) {
+          if (read < ready) {
+            const next = read + 1;
+            updateLoader(
+              `Reading form ${next}${finished ? " of " + ready : ""}\u2026`,
+              read,
+              finished ? ready : 0,
+              finished
+                ? `${ready} form(s) scanned.`
+                : `${ready} scanned so far \u2014 still feeding.`
+            );
+
+            let page;
+            try {
+              const response = await fetch("/api/scan/read", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ job_id: jobId, page_number: next }),
+              });
+              page = await response.json();
+              if (!response.ok) {
+                page = {
+                  student_id: "",
+                  page_number: next,
+                  error: page.error || "Could not read this page.",
+                };
+              }
+            } catch (pageError) {
+              page = {
+                student_id: "",
+                page_number: next,
+                error: pageError.message,
+              };
+            }
+
+            read = next;
+            appendPages([page]);
+            continue;
+          }
+
+          // Nothing new to read yet - ask the scanner how far it has got.
+          const statusResponse = await fetch(
+            `/api/scan/status?job=${encodeURIComponent(jobId)}`
+          );
+          const status = await statusResponse.json();
+          if (!statusResponse.ok) {
+            throw new Error(status.error || "Lost track of the scan.");
+          }
+          ready = status.pages_ready || 0;
+          finished = Boolean(status.finished);
+          scanError = status.error || null;
+
+          if (finished && scanError && ready === 0) throw new Error(scanError);
+
+          if (!finished && read >= ready) {
+            updateLoader(
+              read === 0 ? "Feeding the stack\u2026" : `Read ${read} so far\u2026`,
+              0,
+              0,
+              read === 0
+                ? "Waiting for the first sheet to come through."
+                : `${read} done. Waiting for the next sheet.`
+            );
+            await new Promise((resolve) => setTimeout(resolve, 600));
+          }
+        }
+
+        filesLoading = false;
+        if (read === 0) throw new Error(scanError || "The scanner returned no pages.");
+        maybeFinishIfWaiting();
+
+        if (!autoModeOn()) {
+          statusText.textContent = "Please confirm the Student ID below.";
+        }
+      } catch (error) {
+        filesLoading = false;
+        statusEl.hidden = false;
+        statusEl.className = "status error";
+        statusText.textContent = error.message;
+      } finally {
+        hideLoader();
+        scanBtn.disabled = false;
+        submitBtn.disabled = selectedFiles.length === 0;
+        if (jobId) {
+          // Best effort - the images are no longer needed once read.
+          fetch("/api/scan/finish", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ job_id: jobId }),
+          }).catch(() => {});
+        }
+      }
+    }
+
+    scanBtn.addEventListener("click", scanNow);
+
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       if (selectedFiles.length === 0) {
@@ -593,10 +1242,14 @@
         selectedFiles.length > 1 ? `Reading file 1 of ${selectedFiles.length}…` : "Reading scan…";
       submitBtn.disabled = true;
 
+
       pageQueue = [];
       pageIndex = 0;
-      batchSummary = { saved: 0, notFound: 0, skipped: 0 };
+      batchSummary = { saved: 0, notFound: 0, skipped: 0, review: 0 };
       waitingForMore = false;
+      autoRunning = false;
+      autoResults.innerHTML = "";
+      autoResults.hidden = true;
 
       // Not awaited on purpose — the first page pops up as soon as it's
       // ready; remaining files keep loading into the queue in the
@@ -645,7 +1298,15 @@
         const response = await fetch("/api/confirm", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ student_id: value, source: "manual-entry" }),
+          // Same scope as a scanned form. Without it this was the one path
+          // that searched every school, so a typo here could reach a child
+          // the scanner itself could no longer match.
+          body: JSON.stringify({
+            student_id: value,
+            source: "manual-entry",
+            school: selectedSchool(),
+            location: selectedLocation(),
+          }),
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Check failed");

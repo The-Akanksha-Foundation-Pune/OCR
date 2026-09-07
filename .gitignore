@@ -11,3 +11,6 @@ Thumbs.db
 .env
 _probe_*.py
 logs/
+
+# Cloud service-account keys - never commit these
+secrets/

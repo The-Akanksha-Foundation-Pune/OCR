@@ -18,11 +18,17 @@ from server.config import (
     TROCR_MODEL_NAME,
 )
 from server.services.debug_log import debug_log
+from server.services.devanagari import (
+    fold_devanagari_digits,
+    has_devanagari,
+    transliterate,
+)
 from server.services.preprocess import to_pil_rgb
 
 _processor = None
 _model = None
 _easyocr_reader = None
+_devanagari_reader = None
 
 # Form words / fragments TrOCR often reads instead of the ID
 _REJECT_FRAGMENTS = (
@@ -100,6 +106,57 @@ def recognize_with_easyocr(crop_bgr: np.ndarray) -> list[tuple[str, float]]:
         debug_log(f"[EasyOCR] raw={text!r} cleaned={cleaned!r} conf={conf}")
         if cleaned:
             found.append((cleaned, float(conf)))
+    return found
+
+
+def get_devanagari_reader():
+    """Lazy-load an EasyOCR reader that can actually see Devanagari.
+
+    The main reader is locked to a Latin allowlist, so an ID written in
+    Devanagari is invisible to it. Hindi and Marathi share the script, so
+    one reader covers both forms.
+    """
+    global _devanagari_reader
+    if _devanagari_reader is not None:
+        return _devanagari_reader
+
+    import easyocr
+
+    _devanagari_reader = easyocr.Reader(["hi", "mr"], gpu=False, verbose=False)
+    return _devanagari_reader
+
+
+def recognize_devanagari_id(crop_bgr: np.ndarray) -> list[tuple[str, float]]:
+    """
+    Read a Devanagari-written Student ID and fold it towards Latin.
+
+    Handwritten Devanagari is much harder than Latin, so treat what comes
+    back as a lead rather than an answer: the digits are reliable, the
+    letters are a guess, and student_lookup pairs the two against the real
+    ID list. Confidence is deliberately damped for that reason.
+    """
+    if crop_bgr is None or crop_bgr.size == 0:
+        return []
+    if not has_handwriting_ink(crop_bgr):
+        return []
+
+    try:
+        reader = get_devanagari_reader()
+        enhanced = enhance_id_crop(crop_bgr)
+        results = reader.readtext(enhanced, detail=1)
+    except Exception as exc:  # noqa: BLE001 — never sink the Latin path
+        debug_log(f"[Devanagari] failed: {exc}")
+        return []
+
+    found: list[tuple[str, float]] = []
+    for _box, text, conf in results:
+        raw = str(text)
+        if not has_devanagari(raw):
+            continue
+        folded = transliterate(raw)
+        debug_log(f"[Devanagari] raw={raw!r} folded={folded!r} conf={conf}")
+        if folded:
+            found.append((folded, float(conf) * 0.8))
     return found
 
 
@@ -200,6 +257,10 @@ def clean_student_id(raw_text: str) -> str:
         return ""
 
     text = raw_text.strip().upper()
+    # A parent may write the digits in Devanagari even on an otherwise
+    # Latin ID; those map one-to-one, so fold them before the strip below
+    # would otherwise discard them.
+    text = fold_devanagari_digits(text)
     text = re.sub(STUDENT_ID_PATTERN, "", text)
     text = text.replace(" ", "")
     return text
