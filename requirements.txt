@@ -1,20 +1,49 @@
-Flask>=3.0.0
-Werkzeug>=3.0.0
-numpy>=1.26.0
-opencv-python-headless>=4.8.0
-Pillow>=10.0.0
-PyMuPDF>=1.24.0
-rapidocr-onnxruntime>=1.2.0
-onnxruntime>=1.16.0
-torch>=2.1.0
-torchvision>=0.16.0
-transformers>=5.0.0
-safetensors>=0.4.0
-sentencepiece>=0.1.99
-requests>=2.31.0
-pymysql>=1.1.0
-python-dotenv>=1.0.0
-Authlib>=1.3.0
-rapidfuzz>=3.6.0
-easyocr>=1.7.1
-google-cloud-vision>=3.7.0
+# Versions are the ones this app is actually running on, with the next major
+# release excluded. Open-ended ">=" pins were letting a fresh install pick up
+# major bumps nobody had tested - opencv had already moved 4.x -> 5.x that way.
+
+# ---- web app ----
+Flask>=3.1.3,<4
+Werkzeug>=3.1.8,<4
+python-dotenv>=1.2.2,<2
+requests>=2.34.2,<3
+
+# ---- auth ----
+Authlib>=1.7.2,<2          # Google OAuth2 sign-in
+PyJWT>=2.13.0,<3           # verifies the Tether SSO token (services/sso.py)
+
+# ---- database ----
+PyMySQL>=1.2.0,<2
+
+# ---- imaging / PDF ----
+numpy>=2.5.1,<3
+opencv-python-headless>=5.0.0,<6   # provides "cv2"; headless needs no libGL,
+                                   # which a server does not have. Do not also
+                                   # install opencv-python - both own cv2.
+Pillow>=12.3.0,<13
+PyMuPDF>=1.28.0,<2
+
+# ---- OCR engines ----
+rapidocr-onnxruntime>=1.2.3,<2
+onnxruntime>=1.27.0,<2
+easyocr>=1.7.2,<2                  # Devanagari fallback; pulls in torch
+torch>=2.13.0,<3
+google-cloud-vision>=3.15.0,<4     # primary reader for the Student ID crop
+rapidfuzz>=3.14.5,<4               # constrained repair against the DB
+
+# ---- TrOCR only ----
+# Needed solely by the handwriting model behind USE_TROCR, which defaults to 0
+# in config.py. Safe to drop from a deploy that leaves that flag off - it saves
+# well over a gigabyte.
+torchvision>=0.28.0,<1
+transformers>=5.13.1,<6
+safetensors>=0.8.0,<1
+sentencepiece>=0.2.2,<1
+
+# ---- production server ----
+gunicorn>=23.0.0,<24               # run:app; never run.py on a server
+
+# On Linux, torch defaults to a CUDA build of roughly 2.5 GB. There is no GPU
+# on the EC2 box, so install the CPU wheels first and save the bulk of it:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r requirements.txt

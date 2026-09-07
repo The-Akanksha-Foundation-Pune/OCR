@@ -19,6 +19,7 @@ from server.config import (
 )
 from server.services.auth import current_user
 from server.services.oauth import oauth
+from server.services.sso import consume_sso_token
 
 CLIENT_DIR = BASE_DIR / "client"
 
@@ -47,6 +48,10 @@ def create_app() -> Flask:
         server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
         client_kwargs={"scope": GOOGLE_OAUTH_SCOPES},
     )
+
+    # Runs ahead of every blueprint login gate, so a Tether hand-off works on
+    # whichever page the token is aimed at.
+    app.before_request(consume_sso_token)
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(ocr_bp)

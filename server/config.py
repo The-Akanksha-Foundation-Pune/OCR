@@ -48,6 +48,11 @@ GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 # Only Google accounts on this email domain may sign in — leave blank to allow any
 ALLOWED_EMAIL_DOMAIN = os.getenv("ALLOWED_EMAIL_DOMAIN", "").strip().lower()
 
+# Tether SSO — must equal JWT_SECRET in the Tether server .env. Tether signs a
+# 10-minute token and appends it to this app's URL; see services/sso.py.
+# Unset means no token is ever accepted, and only Google sign-in works.
+INTEGRATION_JWT_SECRET = os.getenv("INTEGRATION_JWT_SECRET", "").strip()
+
 # Google Drive — scanned uploads land in this folder (created if missing)
 DRIVE_OCR_FOLDER_NAME = os.getenv("DRIVE_OCR_FOLDER_NAME", "OCR").strip() or "OCR"
 GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
