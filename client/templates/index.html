@@ -298,6 +298,10 @@
   </div>
 
   <script>
+    // The app can be mounted under a path (nginx sends X-Forwarded-Prefix /ocr
+    // in production). script_root carries that prefix; without it every fetch
+    // below would go to the host root and hit whatever else lives there.
+    const API_BASE = "{{ request.script_root }}";
     const form = document.getElementById("upload-form");
     const manualForm = document.getElementById("manual-form");
     const manualInput = document.getElementById("manual-input");
@@ -529,7 +533,7 @@
       }
 
       try {
-        const response = await fetch("/api/confirm", {
+        const response = await fetch(API_BASE + "/api/confirm", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -619,7 +623,7 @@
         skip.disabled = true;
         field.disabled = true;
         try {
-          const response = await fetch("/api/confirm", {
+          const response = await fetch(API_BASE + "/api/confirm", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -820,7 +824,7 @@
       confirmStatusText.textContent = "Saving…";
 
       try {
-        const response = await fetch("/api/confirm", {
+        const response = await fetch(API_BASE + "/api/confirm", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -949,7 +953,7 @@
       // Always use the batch endpoint — a printer/scanner machine may have
       // batch-scanned a whole stack of forms into one multi-page PDF. A
       // phone photo or single-page scan just comes back as a 1-page batch.
-      const response = await fetch("/api/extract-batch", { method: "POST", body });
+      const response = await fetch(API_BASE + "/api/extract-batch", { method: "POST", body });
       const data = await response.json();
       if (!response.ok) {
         // Couldn't read this file at all — still surface it as one queue
@@ -1047,7 +1051,7 @@
     async function loadSchools() {
       showLoader("Loading schools\u2026");
       try {
-        const response = await fetch("/api/schools");
+        const response = await fetch(API_BASE + "/api/schools");
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Could not load schools");
 
@@ -1113,7 +1117,7 @@
 
       let jobId = null;
       try {
-        const started = await fetch("/api/scan/start", { method: "POST" });
+        const started = await fetch(API_BASE + "/api/scan/start", { method: "POST" });
         const startData = await started.json();
         if (!started.ok) throw new Error(startData.error || "Scan failed");
         jobId = startData.job_id;
@@ -1141,7 +1145,7 @@
 
             let page;
             try {
-              const response = await fetch("/api/scan/read", {
+              const response = await fetch(API_BASE + "/api/scan/read", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ job_id: jobId, page_number: next }),
@@ -1212,7 +1216,7 @@
         submitBtn.disabled = selectedFiles.length === 0;
         if (jobId) {
           // Best effort - the images are no longer needed once read.
-          fetch("/api/scan/finish", {
+          fetch(API_BASE + "/api/scan/finish", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ job_id: jobId }),
@@ -1295,7 +1299,7 @@
       manualInput.disabled = true;
 
       try {
-        const response = await fetch("/api/confirm", {
+        const response = await fetch(API_BASE + "/api/confirm", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           // Same scope as a scanned form. Without it this was the one path

@@ -187,6 +187,10 @@
   </div>
 
   <script>
+    // The app can be mounted under a path (nginx sends X-Forwarded-Prefix /ocr
+    // in production). script_root carries that prefix; without it every fetch
+    // below would go to the host root and hit whatever else lives there.
+    const API_BASE = "{{ request.script_root }}";
     const tabButtons = document.querySelectorAll(".tab-btn");
     const scannedTab = document.getElementById("scanned-tab");
     const notFoundTab = document.getElementById("not-found-tab");
@@ -334,7 +338,7 @@
     async function loadHistSchools() {
       showLoader("Loading schools…");
       try {
-        const response = await fetch("/api/history-schools");
+        const response = await fetch(API_BASE + "/api/history-schools");
         const data = await response.json();
         if (!response.ok) return;
         histSchools = data.schools || [];
@@ -524,7 +528,7 @@
 
       showLoader(all ? "Marking all checked\u2026" : "Marking checked\u2026");
       try {
-        const response = await fetch("/api/scanned/review", {
+        const response = await fetch(API_BASE + "/api/scanned/review", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
@@ -588,7 +592,7 @@
       showLoader("Deleting entry…");
 
       try {
-        const response = await fetch(`/api/not-found/${id}`, { method: "DELETE" });
+        const response = await fetch(`${API_BASE}/api/not-found/${id}`, { method: "DELETE" });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Delete failed.");
 
@@ -631,7 +635,7 @@
       showLoader("Checking Student ID…");
 
       try {
-        const response = await fetch(`/api/not-found/${button.dataset.id}/recheck`, {
+        const response = await fetch(`${API_BASE}/api/not-found/${button.dataset.id}/recheck`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ student_id: value }),
@@ -746,8 +750,8 @@
     (async function preloadCounts() {
       try {
         const [scannedRes, notFoundRes] = await Promise.all([
-          fetch("/api/scanned?page=1&page_size=1"),
-          fetch("/api/not-found?page=1&page_size=1"),
+          fetch(API_BASE + "/api/scanned?page=1&page_size=1"),
+          fetch(API_BASE + "/api/not-found?page=1&page_size=1"),
         ]);
         const scannedData = await scannedRes.json();
         const notFoundData = await notFoundRes.json();
