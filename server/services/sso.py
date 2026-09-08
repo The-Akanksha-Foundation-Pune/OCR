@@ -39,7 +39,11 @@ def _redirect_without_token():
     """
     remaining = [(k, v) for k, v in request.args.items(multi=True) if k != "token"]
     query = urlencode(remaining)
-    return redirect(request.path + (f"?{query}" if query else ""))
+    # script_root, not just path. Mounted under a prefix (nginx sends
+    # X-Forwarded-Prefix /ocr), request.path is the path *inside* the app, so
+    # redirecting to it alone sends the browser out of the app to the host root.
+    target = (request.script_root or "") + request.path
+    return redirect(target + (f"?{query}" if query else ""))
 
 
 def _claims_from(token: str) -> dict | None:
