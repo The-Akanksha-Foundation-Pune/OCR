@@ -75,8 +75,35 @@
           </p>
         </div>
 
+        {% if not server_can_scan %}
+        <section class="inbox" id="inbox-panel" hidden aria-live="polite">
+          <div class="inbox-head">
+            <span class="school-label">Scan from your scanner</span>
+            <span class="inbox-status" id="inbox-status">Checking your Drive inbox…</span>
+          </div>
+          <p class="inbox-hint" id="inbox-hint"></p>
+          <div class="inbox-actions">
+            <button type="button" class="action-btn scan-btn inbox-start" id="inbox-start" disabled>
+              <span class="action-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M4 8V6.5A1.5 1.5 0 0 1 5.5 5H8M16 5h2.5A1.5 1.5 0 0 1 20 6.5V8M20 16v1.5a1.5 1.5 0 0 1-1.5 1.5H16M8 19H5.5A1.5 1.5 0 0 1 4 17.5V16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                  <path d="M3.5 12h17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                </svg>
+              </span>
+              <span class="action-text">
+                <span class="action-title">Start scanning</span>
+                <span class="action-hint">Then press the button on the scanner</span>
+              </span>
+            </button>
+            <button type="button" class="inbox-stop" id="inbox-stop" hidden>Stop</button>
+          </div>
+          <ol id="inbox-results" class="auto-results" hidden></ol>
+        </section>
+        {% endif %}
+
         <div class="action-grid">
-          <button type="button" class="action-btn scan-btn" id="scan-btn">
+          <button type="button" class="action-btn scan-btn" id="scan-btn"
+                  {% if not server_can_scan %}hidden{% endif %}>
             <span class="action-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M4 8V6.5A1.5 1.5 0 0 1 5.5 5H8M16 5h2.5A1.5 1.5 0 0 1 20 6.5V8M20 16v1.5a1.5 1.5 0 0 1-1.5 1.5H16M8 19H5.5A1.5 1.5 0 0 1 4 17.5V16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
@@ -1224,6 +1251,220 @@
         }
       }
     }
+
+    // ---- scanning through the Drive inbox ---------------------------------
+    // The scanner app on this PC (or Mac) saves each page into the person's own
+    // "OCR Inbox" folder in Google Drive; the server's watcher reads them.
+    // Start ties that folder to the school chosen above; Stop unties it. The
+    // rows below are the same rows the automatic mode draws, fed from the
+    // server instead of the browser.
+    const inboxPanel = document.getElementById("inbox-panel");
+    const inboxStatus = document.getElementById("inbox-status");
+    const inboxHint = document.getElementById("inbox-hint");
+    const inboxStart = document.getElementById("inbox-start");
+    const inboxStop = document.getElementById("inbox-stop");
+    const inboxResults = document.getElementById("inbox-results");
+
+    let inboxBatch = null;      // the open batch, or null
+    let inboxLastRowId = 0;     // highest log row id shown so far
+    let inboxPollTimer = null;
+    let inboxFolderFound = false;
+
+    function setInboxStatus(text, tone) {
+      inboxStatus.textContent = text;
+      inboxStatus.className = "inbox-status" + (tone ? " is-" + tone : "");
+    }
+
+    function describeWatcher(watcher) {
+      return watcher && watcher.alive
+        ? ""
+        : " The scan watcher is not running on the server, so pages will wait unread until it is.";
+    }
+
+    function addInboxRow(row) {
+      const li = document.createElement("li");
+      li.className = "auto-row pending";
+      li.innerHTML =
+        '<span class="auto-row-page"></span>' +
+        '<span class="auto-row-id"></span>' +
+        '<span class="auto-row-detail"></span>';
+      li.querySelector(".auto-row-page").textContent = "Page " + (inboxResults.children.length + 1);
+
+      const read = row.confirmed_student_id || "";
+      const saved = row.matched_student_id || "";
+      const via = (row.matched_via || "").toLowerCase();
+      let state, id, detail;
+      if (row.found_in_db) {
+        const repaired = via && via !== "exact" && via !== "shape_fix";
+        state = repaired ? "repaired" : "saved";
+        id = saved || read;
+        detail = (row.student_name || "Saved") +
+          (row.school_name ? " \u00b7 " + row.school_name : "") +
+          (repaired && read && read !== saved ? " \u00b7 read as " + read : "");
+      } else if (read) {
+        state = "notfound";
+        id = read;
+        detail = "Not in database \u2014 see History \u203a Not found";
+      } else {
+        state = "unread";
+        id = "unreadable";
+        detail = row.message || "Could not read a Student ID";
+      }
+      fillAutoRow(li, state, id, detail);
+      if (row.DrivelinkImage) {
+        const link = document.createElement("a");
+        link.href = row.DrivelinkImage;
+        link.target = "_blank";
+        link.rel = "noopener";
+        link.className = "auto-row-link";
+        link.textContent = "view page";
+        li.querySelector(".auto-row-detail").appendChild(document.createTextNode(" \u00b7 "));
+        li.querySelector(".auto-row-detail").appendChild(link);
+      }
+      inboxResults.hidden = false;
+      inboxResults.appendChild(li);
+    }
+
+    function showInboxBatch(batch, watcher) {
+      inboxBatch = batch;
+      const scope = batch.school || (batch.location ? "all " + batch.location + " schools" : "all schools");
+      setInboxStatus(
+        `Scanning for ${scope} \u00b7 ${batch.pages_done || 0} page(s) read`,
+        watcher && watcher.alive === false ? "warn" : "live"
+      );
+      inboxHint.textContent =
+        "Feed the forms and press the button on the scanner. Each page appears below as it is read." +
+        describeWatcher(watcher);
+      inboxStart.hidden = true;
+      inboxStop.hidden = false;
+    }
+
+    function showInboxIdle(status) {
+      inboxBatch = null;
+      inboxStart.hidden = false;
+      inboxStop.hidden = true;
+      if (!inboxFolderFound) {
+        setInboxStatus("Drive folder not shared yet", "warn");
+        inboxHint.textContent =
+          `In your Google Drive, create a folder called "${status.folder_name}" and share it ` +
+          `(as Editor) with ${status.service_account}. Point your scanner app at that folder. ` +
+          `Then reload this page.`;
+        inboxStart.disabled = true;
+        return;
+      }
+      setInboxStatus("Ready", status.watcher && status.watcher.alive ? "ok" : "warn");
+      inboxHint.textContent =
+        "Pick the location and school above, press Start scanning, then scan." +
+        describeWatcher(status.watcher);
+      inboxStart.disabled = false;
+    }
+
+    async function pollInbox() {
+      if (!inboxBatch) return;
+      try {
+        const response = await fetch(
+          `${API_BASE}/api/inbox/results?batch=${inboxBatch.id}&after=${inboxLastRowId}`
+        );
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Lost track of the scan.");
+        for (const row of data.rows || []) {
+          addInboxRow(row);
+          inboxLastRowId = Math.max(inboxLastRowId, row.id || 0);
+        }
+        if (data.batch && data.batch.open) {
+          showInboxBatch(data.batch, data.watcher);
+        } else {
+          // Closed from elsewhere (another tab, or the command line).
+          stopInboxPolling();
+          setInboxStatus(`Stopped \u00b7 ${(data.batch && data.batch.pages_done) || 0} page(s) read`, "ok");
+          inboxHint.textContent = "Press Start scanning to begin another batch.";
+          inboxBatch = null;
+          inboxStart.hidden = false;
+          inboxStop.hidden = true;
+        }
+      } catch (error) {
+        setInboxStatus(error.message, "warn");
+      }
+    }
+
+    function startInboxPolling() {
+      stopInboxPolling();
+      inboxPollTimer = setInterval(pollInbox, 3000);
+      pollInbox();
+    }
+
+    function stopInboxPolling() {
+      if (inboxPollTimer) clearInterval(inboxPollTimer);
+      inboxPollTimer = null;
+    }
+
+    async function loadInboxStatus() {
+      try {
+        const response = await fetch(API_BASE + "/api/inbox/status");
+        const status = await response.json();
+        if (!response.ok || !status.configured) {
+          inboxPanel.hidden = true;
+          return;
+        }
+        inboxPanel.hidden = false;
+        inboxFolderFound = Boolean(status.inbox && status.inbox.found);
+        if (status.batch && status.batch.open) {
+          // Picked up where it was left - a refresh must not lose a running batch.
+          inboxResults.innerHTML = "";
+          inboxLastRowId = 0;
+          showInboxBatch(status.batch, status.watcher);
+          startInboxPolling();
+        } else {
+          showInboxIdle(status);
+        }
+      } catch (_) {
+        inboxPanel.hidden = true;
+      }
+    }
+
+    if (inboxStart) inboxStart.addEventListener("click", async () => {
+      inboxStart.disabled = true;
+      setInboxStatus("Starting\u2026");
+      try {
+        const response = await fetch(API_BASE + "/api/inbox/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ school: selectedSchool(), location: selectedLocation() }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Could not start.");
+        inboxResults.innerHTML = "";
+        inboxResults.hidden = true;
+        inboxLastRowId = 0;
+        showInboxBatch(data.batch, data.watcher);
+        startInboxPolling();
+      } catch (error) {
+        setInboxStatus(error.message, "warn");
+        inboxStart.disabled = false;
+      }
+    });
+
+    if (inboxStop) inboxStop.addEventListener("click", async () => {
+      inboxStop.disabled = true;
+      try {
+        const response = await fetch(API_BASE + "/api/inbox/stop", { method: "POST" });
+        const data = await response.json();
+        stopInboxPolling();
+        const done = (data.batch && data.batch.pages_done) || 0;
+        setInboxStatus(`Stopped \u00b7 ${done} page(s) read`, "ok");
+        inboxHint.textContent = "Press Start scanning to begin another batch.";
+        inboxBatch = null;
+        inboxStart.hidden = false;
+        inboxStart.disabled = false;
+        inboxStop.hidden = true;
+      } catch (error) {
+        setInboxStatus(error.message, "warn");
+      } finally {
+        inboxStop.disabled = false;
+      }
+    });
+
+    if (inboxPanel) loadInboxStatus();
 
     scanBtn.addEventListener("click", scanNow);
 

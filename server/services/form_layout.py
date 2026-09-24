@@ -39,6 +39,10 @@ class FormMatch:
     rule_count: int
     error: float
     source: str  # "rules" | "fallback"
+    # The language that came second. When confidence is low this is the
+    # other plausible reading of the page, and the caller may want to keep
+    # its recognisers (Devanagari) switched on too.
+    runner_up_language: str | None = None
 
 
 def find_rule_rows(image_bgr: np.ndarray) -> list[tuple[float, float, float]]:
@@ -137,6 +141,7 @@ def identify_form(image_bgr: np.ndarray) -> FormMatch | None:
     results.sort()
     error, language, scale, offset = results[0]
     runner_up = results[1][0] if len(results) > 1 else float("inf")
+    runner_up_language = results[1][1] if len(results) > 1 else None
 
     if error > MAX_MATCH_ERROR:
         debug_log(
@@ -165,6 +170,7 @@ def identify_form(image_bgr: np.ndarray) -> FormMatch | None:
         rule_count=len(rows),
         error=error,
         source="rules",
+        runner_up_language=runner_up_language,
     )
 
 

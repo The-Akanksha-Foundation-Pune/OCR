@@ -7,6 +7,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from server.blueprints.auth_routes import auth_bp
 from server.blueprints.history_routes import history_bp
+from server.blueprints.inbox_routes import inbox_bp
 from server.blueprints.ocr_routes import ocr_bp
 from server.config import (
     BASE_DIR,
@@ -20,6 +21,7 @@ from server.config import (
 from server.services.auth import current_user
 from server.services.oauth import oauth
 from server.services.sso import consume_sso_token
+from server.services.warmup import warm_models_in_background
 
 CLIENT_DIR = BASE_DIR / "client"
 
@@ -56,9 +58,13 @@ def create_app() -> Flask:
     app.register_blueprint(auth_bp)
     app.register_blueprint(ocr_bp)
     app.register_blueprint(history_bp)
+    app.register_blueprint(inbox_bp)
 
     @app.context_processor
     def inject_current_user():
         return {"current_user": current_user()}
+
+    # Under gunicorn each worker warms its own copy; that is the point.
+    warm_models_in_background()
 
     return app

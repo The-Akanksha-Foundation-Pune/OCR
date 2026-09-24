@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from flask import Blueprint, jsonify, render_template, request
@@ -45,7 +46,14 @@ def _is_allowed(filename: str) -> bool:
 
 @ocr_bp.get("/")
 def index():
-    return render_template("index.html", active_page="scanner")
+    # The server can only drive a scanner itself on the Windows machine it is
+    # plugged into (scan.ps1 uses Windows Image Acquisition). Elsewhere the
+    # Scan now tile is hidden and scanning goes through the Drive inbox.
+    return render_template(
+        "index.html",
+        active_page="scanner",
+        server_can_scan=(sys.platform == "win32"),
+    )
 
 
 @ocr_bp.get("/api/schools")

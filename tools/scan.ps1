@@ -50,22 +50,51 @@ $WIA_YEXTENT         = 6152
 # re-encodes to JPEG anyway when it stores page images.
 $WIA_FORMAT_JPEG     = "{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}"
 
+# Assign a WIA property without PowerShell's COM binder. The binder caches
+# the setter for WIA.Property.Value by the type of the FIRST value assigned
+# through it: after ints (resolution, extents) a string (FormatID) throws
+# InvalidCastException, and after a string the ints fail instead - which
+# surfaced as the scanner "refusing" perfectly valid settings, and pages
+# coming out 14 inches long in colour. Reflection has no such cache.
+function Set-PropertyValue($Property, $Value) {
+    [System.__ComObject].InvokeMember("Value", `
+        [System.Reflection.BindingFlags]::SetProperty, $null, $Property, @($Value))
+}
+
 function Set-WiaProperty($Properties, [int]$Id, $Value) {
     foreach ($p in $Properties) {
         if ($p.PropertyID -eq $Id) {
-            try {
-                $p.Value = $Value
-                return $true
-            } catch {
-                # Silently ignoring this is what let the scan run at one
-                # resolution while the crop was sized for another.
-                Write-Host ("  ! scanner refused {0} = {1}" -f $p.Name, $Value) `
-                    -ForegroundColor Yellow
+            try { Set-PropertyValue $p $Value; return $true }
+            catch {
+                Write-Host ("  ! scanner refused {0} = {1}: {2}" -f `
+                    $p.Name, $Value, $_.Exception.Message) -ForegroundColor Yellow
                 return $false
             }
         }
     }
     return $false
+}
+
+# The driver hands back BMP whatever format Transfer() asks for, and SaveFile
+# writes the bytes as they are - so every ".jpg" so far has been an 8 MB
+# bitmap. Re-encode each page: about a sixth of the size on disk, and for the
+# browser-driven path a sixth of the upload per sheet. Quality 80 at 300 DPI
+# keeps handwriting crisp for the OCR crop.
+#
+# Optional: a BMP page still reads fine, so a failure here must never stop
+# a scan.
+$convertPages = $false
+$converter = $null
+try {
+    $converter = New-Object -ComObject WIA.ImageProcess
+    $converter.Filters.Add($converter.FilterInfos.Item("Convert").FilterID)
+    $convertFilter = $converter.Filters.Item(1)
+    Set-PropertyValue $convertFilter.Properties.Item("FormatID") $WIA_FORMAT_JPEG
+    Set-PropertyValue $convertFilter.Properties.Item("Quality") 80
+    $convertPages = $true
+} catch {
+    Write-Host ("  ! JPEG re-encode unavailable, pages will be saved as-is: {0}" -f `
+        $_.Exception.Message) -ForegroundColor Yellow
 }
 
 function Get-AllowedValues($Properties, [int]$Id) {
@@ -235,6 +264,15 @@ try {
         }
 
         $transferMs = $pageClock.ElapsedMilliseconds
+        if ($convertPages -and $image.FormatID -ne $WIA_FORMAT_JPEG) {
+            try {
+                $image = $converter.Apply($image)
+            } catch {
+                Write-Host ("  ! JPEG re-encode failed on page {0}, saving as-is: {1}" -f `
+                    $n, $_.Exception.Message) -ForegroundColor Yellow
+                $convertPages = $false
+            }
+        }
         $pagePath = Join-Path $work ("page-{0:D3}.jpg" -f $n)
         if ($streaming) {
             # Save to a temp name and rename: the reader polls this folder,

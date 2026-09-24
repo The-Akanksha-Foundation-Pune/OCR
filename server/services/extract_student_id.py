@@ -17,9 +17,11 @@ from server.config import (
     FAST_MODE,
     VISION_CONFIDENCE_BONUS,
     LAYOUT_TRUST_CONFIDENCE,
+    LAYOUT_TRUST_ERROR,
     USE_TROCR,
 )
 from server.services.debug_log import debug_log
+from server.services.deskew import deskew
 from server.services.field_detector import (
     crop_student_id_value,
     crop_template_value,
@@ -324,25 +326,45 @@ def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
     # unreadable to an English-only OCR model and the label path below
     # comes back empty.
     layout = identify_form(prepared)
+    if layout is None:
+        # ADF-fed pages often land a degree or two off square, which hides
+        # every horizontal line from the detector - measured 0 rules on a
+        # page that was only tilted -1.5 deg. Straighten it and try once more,
+        # rather than fall through to the 26-second template-guess fallback.
+        straightened, angle = deskew(prepared)
+        if angle != 0.0:
+            debug_log(f"[LAYOUT] first pass empty, retrying after deskew {angle:+.2f} deg")
+            layout = identify_form(straightened)
+            if layout is not None:
+                prepared = straightened
     # Whether to spend a Devanagari pass on this page. The layout is the
     # only trustworthy signal here: _score_label calls a bare ID token
     # "english" even on a Hindi form, so the per-candidate language would
     # switch the pass off exactly where it is needed.
-    devanagari_form = layout is not None and layout.language in ("hindi", "marathi")
-
-    # find_student_id_label runs RapidOCR over the entire page (~3.7s) purely
-    # to locate the value field. When the rule ladder has already located it
-    # with confidence, that is work for an answer we have.
-    trust_layout = (
-        FAST_MODE
-        and layout is not None
-        and layout.confidence >= LAYOUT_TRUST_CONFIDENCE
+    devanagari_languages = ("hindi", "marathi")
+    language_settled = layout is not None and layout.confidence >= LAYOUT_TRUST_CONFIDENCE
+    # Whether the rule ladder has pinned the form's lines precisely. The
+    # Student ID is on the same rule in every template, so this locates the
+    # field even when the language call is a near tie.
+    field_located = layout is not None and layout.error <= LAYOUT_TRUST_ERROR
+    devanagari_form = layout is not None and (
+        layout.language in devanagari_languages
+        # A near tie with a Devanagari template: keep that recogniser on,
+        # or a Marathi form read as "english" loses its Devanagari IDs.
+        or (not language_settled and layout.runner_up_language in devanagari_languages)
     )
+
+    # find_student_id_label runs RapidOCR over the entire page (5-38s) purely
+    # to locate the value field. When the rule ladder has already located it,
+    # that is work for an answer we have.
+    trust_layout = FAST_MODE and layout is not None and (language_settled or field_located)
     label = None if trust_layout else find_student_id_label(prepared)
     if trust_layout:
         debug_log(
-            f"[FAST] layout confident ({layout.confidence:.2f}) - "
-            "skipped full-page label OCR"
+            f"[FAST] layout {'confident' if language_settled else 'located the field'} "
+            f"(confidence={layout.confidence:.2f}, error={layout.error:.4f}"
+            f"{'' if language_settled else ', runner-up=' + str(layout.runner_up_language)}) "
+            "- skipped full-page label OCR"
         )
     candidates: list[tuple[str, float, str, str]] = []
 

@@ -2134,3 +2134,76 @@ body.is-busy {
   color: var(--muted-light);
   font-style: italic;
 }
+
+/* ---- scanning through the Drive inbox ------------------------------------ */
+.inbox {
+  margin: 1.1rem 0 0.25rem;
+  padding: 1rem 1.1rem 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+}
+.inbox-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.inbox-status {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted, #6b6b6b);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+.inbox-status::before {
+  content: "";
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: #c9c3b5;
+}
+.inbox-status.is-ok::before   { background: var(--ok); }
+.inbox-status.is-warn::before { background: var(--gold); }
+.inbox-status.is-live::before {
+  background: var(--ok);
+  box-shadow: 0 0 0 0 rgba(31, 138, 87, 0.5);
+  animation: inbox-pulse 1.6s ease-out infinite;
+}
+@keyframes inbox-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(31, 138, 87, 0.45); }
+  100% { box-shadow: 0 0 0 0.6rem rgba(31, 138, 87, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .inbox-status.is-live::before { animation: none; }
+}
+.inbox-hint {
+  margin: 0.45rem 0 0.85rem;
+  font-size: 0.86rem;
+  line-height: 1.5;
+  color: var(--muted, #6b6b6b);
+  max-width: 62ch;
+}
+.inbox-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.inbox-actions .action-btn { flex: 0 1 22rem; margin: 0; }
+.inbox-stop {
+  width: auto;
+  margin: 0;
+  padding: 0.7rem 1.2rem;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  font-weight: 600;
+  cursor: pointer;
+}
+.inbox-stop:hover { border-color: var(--accent); color: var(--accent); }
+.inbox-stop:disabled { opacity: 0.6; cursor: default; }
+.auto-row-link { color: var(--accent); text-decoration: underline; }

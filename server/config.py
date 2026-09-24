@@ -55,6 +55,12 @@ INTEGRATION_JWT_SECRET = os.getenv("INTEGRATION_JWT_SECRET", "").strip()
 
 # Google Drive — scanned uploads land in this folder (created if missing)
 DRIVE_OCR_FOLDER_NAME = os.getenv("DRIVE_OCR_FOLDER_NAME", "OCR").strip() or "OCR"
+
+# Scan-to-Drive inbox. Each person keeps a folder of this name in their own
+# Drive, shares it with the Vision service account, and points their scanner
+# app at it. The watcher (server/inbox_watcher.py) reads pages from there.
+DRIVE_INBOX_FOLDER_NAME = os.getenv("DRIVE_INBOX_FOLDER_NAME", "OCR Inbox").strip() or "OCR Inbox"
+INBOX_POLL_SECONDS = int(os.getenv("INBOX_POLL_SECONDS", "5"))
 GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 GOOGLE_OAUTH_SCOPES = f"openid email profile {GOOGLE_DRIVE_SCOPE}"
 
@@ -127,6 +133,13 @@ FAST_MODE = os.getenv("FAST_MODE", "1").strip().lower() in ("1", "true", "yes")
 # Real forms measure 4-6%; a blank reverse with bleed-through is under 1%.
 BLANK_PAGE_INK_RATIO = 0.02
 LAYOUT_TRUST_CONFIDENCE = 0.80
+# LAYOUT_TRUST_ERROR: a rule-ladder match at or under this mean row error has
+# found the form's lines precisely, whichever language it turns out to be.
+# The Student ID sits on the same rule in every template, so the field is
+# located even when English and Marathi are a near tie - and a near tie is
+# what sent three pages in four through a 5-38s full-page OCR for nothing.
+# Typical clean scans match at 0.0003-0.0011; rejection is at 0.020.
+LAYOUT_TRUST_ERROR = 0.0025
 
 # Fuzzy-repair safety. A repaired match is a guess at which of 16,000+ real
 # students a misread ID belongs to, and a wrong guess silently marks the
