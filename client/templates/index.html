@@ -1173,7 +1173,7 @@
 
           // Nothing new to read yet - ask the scanner how far it has got.
           const statusResponse = await fetch(
-            `/api/scan/status?job=${encodeURIComponent(jobId)}`
+            `${API_BASE}/api/scan/status?job=${encodeURIComponent(jobId)}`
           );
           const status = await statusResponse.json();
           if (!statusResponse.ok) {

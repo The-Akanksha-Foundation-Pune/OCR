@@ -295,7 +295,7 @@
     }
 
     function apiForTab(tab) {
-      return tab === "scanned" ? "/api/scanned" : "/api/not-found";
+      return API_BASE + (tab === "scanned" ? "/api/scanned" : "/api/not-found");
     }
 
     // Location narrows which schools are offered; school narrows the rows.
