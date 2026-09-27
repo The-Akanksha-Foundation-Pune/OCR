@@ -385,6 +385,39 @@ def _get_all_student_ids(cur, scope: list[str] | None = None) -> list[str]:
     return ids
 
 
+def school_progress(school: str | None, location: str | None) -> dict[str, int]:
+    """How many students in this school (or Pune / Mumbai / Nagpur) have had
+    their form scanned so far. Both counts come from active_student_data,
+    which is where scanned_at is written the moment a match is confirmed -
+    so the number is live as pages come off the scanner.
+
+    Returns {total, scanned}, or {total: 0, scanned: 0} if the scope is empty.
+    """
+    schools = resolve_scope(school, location)
+    if not schools:
+        return {"total": 0, "scanned": 0}
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            slots = ", ".join(["%s"] * len(schools))
+            cur.execute(
+                f"""
+                SELECT COUNT(*)                        AS total,
+                       SUM(scanned_at IS NOT NULL)     AS scanned
+                FROM {STUDENT_TABLE}
+                WHERE UPPER(TRIM(school_name)) IN ({slots})
+                """,
+                [s.upper() for s in schools],
+            )
+            row = cur.fetchone() or {}
+        return {
+            "total":   int(row.get("total")   or 0),
+            "scanned": int(row.get("scanned") or 0),
+        }
+    finally:
+        conn.close()
+
+
 def list_schools() -> list[str]:
     """Distinct school names, for the picker on the scan page."""
     conn = get_connection()

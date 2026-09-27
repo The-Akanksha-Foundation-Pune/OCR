@@ -17,6 +17,7 @@ from flask import Blueprint, jsonify, request
 from server.services import batch_store, drive_inbox
 from server.services.auth import current_user, require_login
 from server.services.debug_log import debug_log
+from server.services.student_lookup import school_progress
 
 inbox_bp = Blueprint("inbox", __name__)
 inbox_bp.before_request(require_login)
@@ -44,13 +45,25 @@ def inbox_status():
         return jsonify({"configured": False, "reason": why}), 200
 
     email = _me()
+    open_batch = batch_store.open_batch_for(email)
+    # Progress numbers: prefer the open batch's own school (that is the one
+    # being scanned right now); otherwise honour whatever the page passes in
+    # its query so the counter updates the moment the school picker changes.
+    if open_batch:
+        progress = school_progress(open_batch.get("school"), open_batch.get("location"))
+    else:
+        progress = school_progress(
+            request.args.get("school"),
+            request.args.get("location"),
+        )
     payload = {
         "configured": True,
         "service_account": drive_inbox.service_account_email(),
         "folder_name": drive_inbox.DRIVE_INBOX_FOLDER_NAME,
         "inbox": {"found": False},
-        "batch": batch_store.open_batch_for(email),
+        "batch": open_batch,
         "watcher": _watcher_state(),
+        "progress": progress,
     }
     try:
         inbox = drive_inbox.find_inbox(email)
@@ -87,7 +100,11 @@ def inbox_start():
         school=school or None, location=location or None, opened_by=email,
     )
     debug_log(f"[INBOX] {email} started batch {batch_id} school={school!r} location={location!r}")
-    return jsonify({"batch": batch_store.get_batch(batch_id), "watcher": _watcher_state()}), 200
+    return jsonify({
+        "batch": batch_store.get_batch(batch_id),
+        "watcher": _watcher_state(),
+        "progress": school_progress(school or None, location or None),
+    }), 200
 
 
 @inbox_bp.post("/api/inbox/stop")
@@ -118,4 +135,5 @@ def inbox_results():
         "batch": batch,
         "rows": batch_store.batch_results(batch_id, after_id=after),
         "watcher": _watcher_state(),
+        "progress": school_progress(batch.get("school"), batch.get("location")),
     }), 200

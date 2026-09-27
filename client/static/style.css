@@ -2207,3 +2207,10 @@ body.is-busy {
 .inbox-stop:hover { border-color: var(--accent); color: var(--accent); }
 .inbox-stop:disabled { opacity: 0.6; cursor: default; }
 .auto-row-link { color: var(--accent); text-decoration: underline; }
+
+.inbox-progress {
+  margin: 0.35rem 0 0.15rem;
+  font-size: 0.86rem;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}

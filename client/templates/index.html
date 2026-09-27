@@ -81,6 +81,7 @@
             <span class="school-label">Scan from your scanner</span>
             <span class="inbox-status" id="inbox-status">Checking your Drive inbox…</span>
           </div>
+          <p class="inbox-progress" id="inbox-progress" hidden></p>
           <p class="inbox-hint" id="inbox-hint"></p>
           <div class="inbox-actions">
             <button type="button" class="action-btn scan-btn inbox-start" id="inbox-start" disabled>
@@ -1269,6 +1270,34 @@
     let inboxLastRowId = 0;     // highest log row id shown so far
     let inboxPollTimer = null;
     let inboxFolderFound = false;
+    let inboxProgress = null;   // {total, scanned} for the current school
+
+    const inboxProgressLine = document.getElementById("inbox-progress");
+
+    function schoolLabel() {
+      const s = selectedSchool();
+      if (s) return s;
+      const l = selectedLocation();
+      return l ? `all ${l} schools` : "all schools";
+    }
+
+    function renderInboxProgress() {
+      if (!inboxProgress || !inboxProgress.total) {
+        inboxProgressLine.hidden = true;
+        return;
+      }
+      const { scanned, total } = inboxProgress;
+      const remaining = Math.max(total - scanned, 0);
+      inboxProgressLine.hidden = false;
+      inboxProgressLine.textContent =
+        `${scanned} of ${total} ${schoolLabel()} students scanned so far ` +
+        `— ${remaining} still to go.`;
+    }
+
+    function updateInboxProgress(progress) {
+      if (progress && typeof progress.total === "number") inboxProgress = progress;
+      renderInboxProgress();
+    }
 
     function setInboxStatus(text, tone) {
       inboxStatus.textContent = text;
@@ -1371,6 +1400,7 @@
           addInboxRow(row);
           inboxLastRowId = Math.max(inboxLastRowId, row.id || 0);
         }
+        updateInboxProgress(data.progress);
         if (data.batch && data.batch.open) {
           showInboxBatch(data.batch, data.watcher);
         } else {
@@ -1400,7 +1430,11 @@
 
     async function loadInboxStatus() {
       try {
-        const response = await fetch(API_BASE + "/api/inbox/status");
+        const params = new URLSearchParams();
+        if (selectedSchool()) params.set("school", selectedSchool());
+        if (selectedLocation()) params.set("location", selectedLocation());
+        const suffix = params.toString() ? `?${params}` : "";
+        const response = await fetch(API_BASE + "/api/inbox/status" + suffix);
         const status = await response.json();
         if (!response.ok || !status.configured) {
           inboxPanel.hidden = true;
@@ -1408,6 +1442,7 @@
         }
         inboxPanel.hidden = false;
         inboxFolderFound = Boolean(status.inbox && status.inbox.found);
+        updateInboxProgress(status.progress);
         if (status.batch && status.batch.open) {
           // Picked up where it was left - a refresh must not lose a running batch.
           inboxResults.innerHTML = "";
@@ -1421,6 +1456,51 @@
         inboxPanel.hidden = true;
       }
     }
+
+    // Progress line moves when the picker moves, without waiting for a Start.
+    async function refreshProgressForPicker() {
+      const params = new URLSearchParams();
+      if (selectedSchool()) params.set("school", selectedSchool());
+      if (selectedLocation()) params.set("location", selectedLocation());
+      try {
+        const r = await fetch(API_BASE + "/api/inbox/status?" + params);
+        if (!r.ok) return;
+        const data = await r.json();
+        updateInboxProgress(data.progress);
+      } catch (_) { /* only a hint */ }
+    }
+
+    // A picker change while a batch is open is almost always a school switch;
+    // make it deliberate so the next school’s forms cannot be scanned into
+    // the current batch by accident.
+    function guardPickerChange(event) {
+      if (!inboxBatch) {
+        if (inboxPanel && !inboxPanel.hidden) refreshProgressForPicker();
+        return;
+      }
+      const scope = inboxBatch.school || (inboxBatch.location ? "all " + inboxBatch.location + " schools" : "all schools");
+      const ok = window.confirm(
+        `You have a scan open for ${scope} (${inboxBatch.pages_done || 0} page(s) read). ` +
+        `Stop this batch first, then start a new one for the next school?`
+      );
+      if (ok) {
+        inboxStop.click();
+        refreshProgressForPicker();
+      } else if (event && event.target) {
+        if (event.target.tagName === "SELECT" && inboxBatch.school) {
+          event.target.value = inboxBatch.school;
+        } else if (event.target.type === "radio" && inboxBatch.location) {
+          const wanted = document.querySelector(
+            `input[type=radio][name="${event.target.name}"][value="${inboxBatch.location}"]`
+          );
+          if (wanted) wanted.checked = true;
+        }
+      }
+    }
+    document.querySelectorAll("#location-radios input[type=radio]").forEach(
+      (r) => r.addEventListener("change", guardPickerChange)
+    );
+    if (schoolSelect) schoolSelect.addEventListener("change", guardPickerChange);
 
     if (inboxStart) inboxStart.addEventListener("click", async () => {
       inboxStart.disabled = true;
@@ -1436,6 +1516,7 @@
         inboxResults.innerHTML = "";
         inboxResults.hidden = true;
         inboxLastRowId = 0;
+        updateInboxProgress(data.progress);
         showInboxBatch(data.batch, data.watcher);
         startInboxPolling();
       } catch (error) {
