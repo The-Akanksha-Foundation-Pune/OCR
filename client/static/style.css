@@ -417,7 +417,8 @@ html {
 
 
 .page-wide {
-  width: min(1000px, calc(100% - 2rem));
+  /* Kept for backward compatibility - the page rule already fills the space
+     beside the sidebar, so nothing extra is needed here. */
 }
 
 .header {
