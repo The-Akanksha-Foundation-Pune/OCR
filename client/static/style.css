@@ -403,10 +403,16 @@ html {
 /* ---------- Page shell ---------- */
 
 .page {
-  max-width: 60rem;
-  margin: 0 auto;
-  padding: 2.5rem clamp(1rem, 2.5vw, 2rem) 4rem;
   margin-left: var(--sidebar-width);
+  padding: 2.5rem clamp(1.5rem, 3.5vw, 3rem) 4rem;
+  max-width: none;
+}
+/* Keep the reading column comfortable on very wide screens - a page-wide
+   panel becomes hard to scan past ~72rem, so cap the inner shell there and
+   let the space beyond it stay quiet ground. */
+.page > * {
+  max-width: 72rem;
+  margin-inline: auto;
 }
 @media (max-width: 900px) {
   .page {
