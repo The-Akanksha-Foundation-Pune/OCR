@@ -68,6 +68,7 @@ body {
   font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
   background: var(--paper);
+  font-size: 16px;
 }
 
 ::selection {
@@ -431,44 +432,32 @@ html {
 }
 
 .brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
+  display: block;
   margin: 0 0 0.85rem;
-  padding: 0.3rem 0.7rem 0.3rem 0.55rem;
-  font-size: 0.78rem;
-  letter-spacing: 0.06em;
+  font-size: 0.75rem;          /* text-xs */
+  letter-spacing: 0.14em;      /* Kaleidoscope's eyebrow tracking */
   text-transform: uppercase;
-  color: var(--accent-dark);
-  background: var(--accent-light);
-  border: 1px solid #bbf7d0;
-  border-radius: 999px;
-  font-weight: 700;
+  color: var(--accent-dark);   /* blue-700 */
+  font-weight: 600;            /* font-semibold */
 }
 
-.brand::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-}
 
 h1 {
   margin: 0 0 0.65rem;
   font-family: var(--font-display);
-  font-size: clamp(1.9rem, 4vw, 2.5rem);
+  font-size: clamp(1.875rem, 4vw, 2.25rem);   /* text-3xl - text-4xl */
   line-height: 1.15;
-  font-weight: 800;
-  letter-spacing: -0.01em;
+  font-weight: 700;                            /* font-bold */
+  letter-spacing: -0.025em;                    /* tracking-tight */
+  color: var(--ink);                           /* slate-900 */
 }
 
 .lede {
   margin: 0;
   color: var(--muted);
   line-height: 1.6;
-  max-width: 38rem;
-  font-size: 1.02rem;
+  max-width: 42rem;
+  font-size: 1rem;             /* text-base */
 }
 
 /* ---------- Panels / cards ---------- */
