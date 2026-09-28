@@ -1,34 +1,83 @@
-<nav class="topnav">
-  <div class="topnav-inner">
-    <a class="topnav-brand" href="{{ url_for('ocr.index') }}">
-      <span class="topnav-brand-mark" aria-hidden="true">
+{#
+  Sidebar (replaces the old top nav). Mirrors Kaleidoscope's left-nav pattern.
+  On phones it slides in as a drawer; the toggle button and backdrop are hidden
+  at wide widths via CSS media queries.
+#}
+<button type="button" id="sidebar-toggle" class="sidebar-toggle"
+        aria-label="Open menu" aria-controls="sidebar" aria-expanded="false">
+  <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  </svg>
+</button>
+<div id="sidebar-backdrop" class="sidebar-backdrop" aria-hidden="true"></div>
+
+<aside id="sidebar" class="sidebar" aria-label="Main">
+  <a class="sidebar-brand" href="{{ url_for('ocr.index') }}">
+    <span class="sidebar-brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M8 10.5h8M8 14h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+    </span>
+    Akanksha OCR
+  </a>
+
+  <nav class="sidebar-links" aria-label="Sections">
+    <a href="{{ url_for('ocr.index') }}"
+       class="sidebar-link{{ ' active' if active_page == 'scanner' else '' }}">
+      <span class="sidebar-link-icon" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z" stroke="currentColor" stroke-width="1.6"/>
-          <path d="M8 10.5h8M8 14h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          <path d="M4 8V6.5A1.5 1.5 0 0 1 5.5 5H8M16 5h2.5A1.5 1.5 0 0 1 20 6.5V8M20 16v1.5a1.5 1.5 0 0 1-1.5 1.5H16M8 19H5.5A1.5 1.5 0 0 1 4 17.5V16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+          <path d="M3.5 12h17" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
         </svg>
       </span>
-      Akanksha Form OCR
+      Scanner
     </a>
-    <div class="topnav-links">
-      <a
-        href="{{ url_for('ocr.index') }}"
-        class="topnav-link{{ ' active' if active_page == 'scanner' else '' }}"
-      >Scanner</a>
-      <a
-        href="{{ url_for('history.history_page') }}"
-        class="topnav-link{{ ' active' if active_page == 'history' else '' }}"
-      >History</a>
-    </div>
-    {% if current_user %}
-    <div class="topnav-user">
-      {% if current_user.picture %}
-        <img class="topnav-avatar" src="{{ current_user.picture }}" alt="" referrerpolicy="no-referrer" />
-      {% else %}
-        <span class="topnav-avatar topnav-avatar-fallback" aria-hidden="true">{{ current_user.name[:1]|upper }}</span>
-      {% endif %}
-      <span class="topnav-user-name">{{ current_user.name }}</span>
-      <a class="topnav-logout" href="{{ url_for('auth.logout') }}">Sign out</a>
-    </div>
+    <a href="{{ url_for('history.history_page') }}"
+       class="sidebar-link{{ ' active' if active_page == 'history' else '' }}">
+      <span class="sidebar-link-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M4 6h16M4 12h16M4 18h11" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        </svg>
+      </span>
+      History
+    </a>
+  </nav>
+
+  {% if current_user %}
+  <div class="sidebar-user">
+    {% if current_user.picture %}
+      <img class="sidebar-avatar" src="{{ current_user.picture }}"
+           alt="" referrerpolicy="no-referrer" />
+    {% else %}
+      <span class="sidebar-avatar sidebar-avatar-fallback"
+            aria-hidden="true">{{ current_user.name[:1]|upper }}</span>
     {% endif %}
+    <div class="sidebar-user-meta">
+      <span class="sidebar-user-name">{{ current_user.name }}</span>
+      <a class="sidebar-logout" href="{{ url_for('auth.logout') }}">Sign out</a>
+    </div>
   </div>
-</nav>
+  {% endif %}
+</aside>
+
+<script>
+  // Drawer toggle for phone widths. Inline so it works before any deferred JS.
+  (function () {
+    var t = document.getElementById("sidebar-toggle");
+    var s = document.getElementById("sidebar");
+    var b = document.getElementById("sidebar-backdrop");
+    if (!t || !s || !b) return;
+    function open()  { s.classList.add("is-open");    b.classList.add("is-open");    t.setAttribute("aria-expanded", "true");  }
+    function close() { s.classList.remove("is-open"); b.classList.remove("is-open"); t.setAttribute("aria-expanded", "false"); }
+    t.addEventListener("click", function () {
+      s.classList.contains("is-open") ? close() : open();
+    });
+    b.addEventListener("click", close);
+    // Any nav link tap on mobile closes the drawer so the page underneath is
+    // visible immediately.
+    s.querySelectorAll(".sidebar-link").forEach(function (a) {
+      a.addEventListener("click", close);
+    });
+  })();
+</script>
