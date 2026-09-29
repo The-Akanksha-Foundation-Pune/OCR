@@ -1364,8 +1364,11 @@
     function showInboxBatch(batch, watcher) {
       inboxBatch = batch;
       const scope = batch.school || (batch.location ? "all " + batch.location + " schools" : "all schools");
+      const read = batch.pages_done || 0;
+      const waiting = (typeof inboxPending === "number" && inboxPending > 0) ? inboxPending : 0;
+      const tail = waiting ? ` \u00b7 ${waiting} still to read` : "";
       setInboxStatus(
-        `Scanning for ${scope} \u00b7 ${batch.pages_done || 0} page(s) read`,
+        `Scanning for ${scope} \u00b7 ${read} page(s) read${tail}`,
         watcher && watcher.alive === false ? "warn" : "live"
       );
       inboxHint.textContent =
@@ -1388,10 +1391,14 @@
         inboxStart.disabled = true;
         return;
       }
-      setInboxStatus("Ready", status.watcher && status.watcher.alive ? "ok" : "warn");
-      inboxHint.textContent =
-        "Pick the location and school above, press Start scanning, then scan." +
-        describeWatcher(status.watcher);
+      const waiting = (typeof inboxPending === "number" && inboxPending > 0) ? inboxPending : 0;
+      const readyLabel = waiting ? `Ready \u00b7 ${waiting} waiting in Drive` : "Ready";
+      setInboxStatus(readyLabel, status.watcher && status.watcher.alive ? "ok" : "warn");
+      inboxHint.textContent = (
+        waiting
+          ? `${waiting} page(s) already in your Drive folder. Press Start scanning to read them.`
+          : "Pick the location and school above, press Start scanning, then scan."
+      ) + describeWatcher(status.watcher);
       inboxStart.disabled = false;
     }
 
@@ -1450,6 +1457,7 @@
         }
         inboxPanel.hidden = false;
         inboxFolderFound = Boolean(status.inbox && status.inbox.found);
+        inboxPending = typeof status.pending === "number" ? status.pending : null;
         updateInboxProgress(status.progress);
         if (status.batch && status.batch.open) {
           // Picked up where it was left - a refresh must not lose a running batch.

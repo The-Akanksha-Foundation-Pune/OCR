@@ -85,6 +85,10 @@ def inbox_status():
         return jsonify(payload), 200
     if inbox:
         payload["inbox"] = {"found": True, "folder_id": inbox["id"], "shared_at": inbox["shared_at"]}
+        # So the idle panel can say "3 pages already waiting in Drive" before
+        # anyone presses Start - otherwise you cannot tell if the scanner has
+        # been feeding pages into the folder while nobody was watching.
+        payload["pending"] = _pending_in_inbox(inbox["id"])
     return jsonify(payload), 200
 
 
