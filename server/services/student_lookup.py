@@ -385,17 +385,30 @@ def _get_all_student_ids(cur, scope: list[str] | None = None) -> list[str]:
     return ids
 
 
-def school_progress(school: str | None, location: str | None) -> dict[str, int]:
+def school_progress(school: str | None, location: str | None) -> dict[str, Any]:
     """How many students in this school (or Pune / Mumbai / Nagpur) have had
     their form scanned so far. Both counts come from active_student_data,
     which is where scanned_at is written the moment a match is confirmed -
     so the number is live as pages come off the scanner.
 
-    Returns {total, scanned}, or {total: 0, scanned: 0} if the scope is empty.
+    Returns {total, scanned, label} where label names the scope the counts
+    are for (e.g. "ABMPS", "all Mumbai schools"). The panel renders the
+    line from this label instead of whatever is in the picker right now -
+    otherwise a stale poll can wear a fresh label and show ABMPS's name
+    over a whole-city total.
     """
+    named = (school or "").strip()
+    city = (location or "").strip()
+    if named:
+        label = named
+    elif city:
+        label = f"all {city} schools"
+    else:
+        label = "all schools"
+
     schools = resolve_scope(school, location)
     if not schools:
-        return {"total": 0, "scanned": 0}
+        return {"total": 0, "scanned": 0, "label": label}
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -413,6 +426,7 @@ def school_progress(school: str | None, location: str | None) -> dict[str, int]:
         return {
             "total":   int(row.get("total")   or 0),
             "scanned": int(row.get("scanned") or 0),
+            "label":   label,
         }
     finally:
         conn.close()

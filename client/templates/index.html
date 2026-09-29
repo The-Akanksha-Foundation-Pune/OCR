@@ -1290,11 +1290,14 @@
         inboxProgressLine.hidden = true;
         return;
       }
-      const { scanned, total } = inboxProgress;
+      const { scanned, total, label } = inboxProgress;
       const remaining = Math.max(total - scanned, 0);
+      // Use the label the server sent with these numbers, not the current
+      // picker - a stale response must not wear a fresh school's name.
+      const scope = label || schoolLabel();
       inboxProgressLine.hidden = false;
       inboxProgressLine.textContent =
-        `${scanned} of ${total} ${schoolLabel()} students scanned so far ` +
+        `${scanned} of ${total} ${scope} students scanned so far ` +
         `— ${remaining} still to go.`;
     }
 
