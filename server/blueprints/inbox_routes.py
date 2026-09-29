@@ -37,6 +37,19 @@ def _watcher_state() -> dict:
     return {"alive": alive, "last_seen": seen.isoformat(sep=" ", timespec="seconds") if seen else None}
 
 
+def _pending_in_inbox(folder_id: str | None) -> int | None:
+    """How many pages are sitting in this inbox unread. None if it cannot be
+    determined right now (Drive hiccup, no folder yet) - the panel should
+    just not show the number rather than lie."""
+    if not folder_id:
+        return None
+    try:
+        return len(drive_inbox.list_new_pages(folder_id))
+    except drive_inbox.DriveInboxError as exc:
+        debug_log(f"[INBOX] pending count failed: {exc}")
+        return None
+
+
 @inbox_bp.get("/api/inbox/status")
 def inbox_status():
     """Everything the page needs to draw the panel in one call."""
@@ -112,6 +125,21 @@ def inbox_stop():
     batch = batch_store.open_batch_for(_me())
     if not batch:
         return jsonify({"closed": False, "batch": None}), 200
+
+    # The panel asks for a confirmation when there are files still in the
+    # inbox: closing now would leave those pages unread and unattributed to
+    # any school. Force=true is the confirmed-close path.
+    body = request.get_json(silent=True) or {}
+    if not body.get("force"):
+        pending = _pending_in_inbox(batch.get("folder_id")) or 0
+        if pending > 0:
+            return jsonify({
+                "closed": False,
+                "batch": batch,
+                "pending": pending,
+                "reason": "pending",
+            }), 409
+
     batch_store.close_batch(int(batch["id"]))
     return jsonify({"closed": True, "batch": batch_store.get_batch(int(batch["id"]))}), 200
 
@@ -136,4 +164,5 @@ def inbox_results():
         "rows": batch_store.batch_results(batch_id, after_id=after),
         "watcher": _watcher_state(),
         "progress": school_progress(batch.get("school"), batch.get("location")),
+        "pending": _pending_in_inbox(batch.get("folder_id")),
     }), 200
