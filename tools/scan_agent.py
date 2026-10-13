@@ -2,8 +2,9 @@
 
 A browser cannot reach a USB scanner, so when the app runs on a server there
 has to be something on the scanning machine that can. This is that something:
-a small HTTP server on 127.0.0.1 which runs tools/scan.ps1 and hands the pages
-back to the page that asked.
+a small HTTP server on 127.0.0.1 which runs the scan script for this machine -
+tools/scan.ps1 on Windows, tools/scan_mac.py on a Mac (which needs NAPS2:
+brew install --cask naps2) - and hands the pages back to the page that asked.
 
 It deliberately holds no credentials and never contacts the server. The browser
 uploads the pages itself, using the session the person already signed in with.
@@ -12,7 +13,8 @@ only work a scanner, and only for a browser on the same machine.
 
 Run it:
 
-    python tools/scan_agent.py
+    python tools/scan_agent.py        (Windows)
+    python3 tools/scan_agent.py       (Mac)
 
 Then from the app, Scan now calls it. To check it by hand, open
 https://tether.akanksha.org/ocr/ and run this in the browser console:
@@ -23,6 +25,7 @@ https://tether.akanksha.org/ocr/ and run this in the browser console:
 from __future__ import annotations
 
 import base64
+import errno
 import json
 import shutil
 import subprocess
@@ -36,7 +39,11 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 PORT = 8765
-SCAN_SCRIPT = Path(__file__).resolve().parent / "scan.ps1"
+TOOLS = Path(__file__).resolve().parent
+# Both scripts honour the same contract: page-NNN.jpg files in the folder they
+# are given, then done.txt or failed.txt. Everything below is shared.
+SCAN_SCRIPTS = {"win32": TOOLS / "scan.ps1", "darwin": TOOLS / "scan_mac.py"}
+SCAN_SCRIPT = SCAN_SCRIPTS.get(sys.platform)
 DEFAULT_SCANNER = "SP-1130N"
 
 # Only these pages may talk to the agent. A browser will refuse anything else,
@@ -45,16 +52,26 @@ ALLOWED_ORIGINS = {
     "https://tether.akanksha.org",
     "http://localhost:5000",
     "http://127.0.0.1:5000",
+    # Local runs on a Mac, where AirPlay Receiver holds port 5000.
+    "http://localhost:5001",
+    "http://127.0.0.1:5001",
 }
 
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
 
 
-def _start_scan(scanner: str) -> dict:
-    """Kick off scan.ps1 writing into a fresh folder, and return the job."""
-    folder = Path(tempfile.mkdtemp(prefix="scan-agent-"))
-    command = [
+def _scan_command(folder: Path, scanner: str) -> list[str]:
+    if sys.platform == "darwin":
+        return [
+            sys.executable,
+            str(SCAN_SCRIPT),
+            "--stream-dir",
+            str(folder),
+            "--scanner",
+            scanner,
+        ]
+    return [
         "powershell",
         "-NoProfile",
         "-ExecutionPolicy",
@@ -66,6 +83,12 @@ def _start_scan(scanner: str) -> dict:
         "-Scanner",
         scanner,
     ]
+
+
+def _start_scan(scanner: str) -> dict:
+    """Kick off the scan script writing into a fresh folder, and return the job."""
+    folder = Path(tempfile.mkdtemp(prefix="scan-agent-"))
+    command = _scan_command(folder, scanner)
     log = open(folder / "scan.log", "w", encoding="utf-8", errors="replace")
     process = subprocess.Popen(
         command,
@@ -82,8 +105,9 @@ def _start_scan(scanner: str) -> dict:
 def _pages_after(job: dict, after: int) -> list[dict]:
     """Pages captured since page `after`, as base64 JPEGs.
 
-    scan.ps1 writes each page to a .part file and renames it once complete, so
-    anything matching page-*.jpg is safe to read - no half-written images.
+    Both scan scripts write each page under another name and rename it once
+    complete, so anything matching page-*.jpg is safe to read - no
+    half-written images.
     """
     out = []
     for path in sorted(job["folder"].glob("page-*.jpg")):
@@ -116,7 +140,7 @@ def _job_finished(job: dict) -> tuple[bool, str | None]:
 
 
 def _last_words(job: dict) -> str:
-    """The tail of scan.ps1's own output, for when it dies without a marker."""
+    """The tail of the scan script's output, for when it dies without a marker."""
     try:
         job["log"].flush()
         text = (job["folder"] / "scan.log").read_text(encoding="utf-8", errors="replace")
@@ -183,7 +207,7 @@ class Handler(BaseHTTPRequestHandler):
                     "agent": "akanksha-scan-agent",
                     "version": 1,
                     "platform": sys.platform,
-                    "scan_script": SCAN_SCRIPT.exists(),
+                    "scan_script": bool(SCAN_SCRIPT and SCAN_SCRIPT.exists()),
                 }
             )
 
@@ -209,13 +233,13 @@ class Handler(BaseHTTPRequestHandler):
         route = urlparse(self.path)
 
         if route.path == "/scan":
-            if sys.platform != "win32":
+            if SCAN_SCRIPT is None:
                 return self._json(
-                    {"error": "The scan agent only runs on Windows."}, 503
+                    {"error": "The scan agent only runs on Windows and macOS."}, 503
                 )
             if not SCAN_SCRIPT.exists():
                 return self._json(
-                    {"error": f"scan.ps1 is missing: {SCAN_SCRIPT}"}, 500
+                    {"error": f"{SCAN_SCRIPT.name} is missing: {SCAN_SCRIPT}"}, 500
                 )
             length = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(length) or "{}") if length else {}
@@ -246,14 +270,29 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print("Akanksha scan agent", flush=True)
-    print(f"  listening on  http://127.0.0.1:{PORT}", flush=True)
-    print(f"  scan script   {SCAN_SCRIPT}  ({'found' if SCAN_SCRIPT.exists() else 'MISSING'})", flush=True)
-    print(f"  accepts       {', '.join(sorted(ALLOWED_ORIGINS))}", flush=True)
-    print("\n  Leave this window open while scanning. Ctrl+C to stop.\n", flush=True)
+    # Bind before printing anything, so a second copy says why it cannot
+    # start instead of announcing itself and then dying with a traceback.
     # Loopback only. Binding 0.0.0.0 would let the rest of the network drive
     # this person's scanner.
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    except OSError as exc:
+        if exc.errno != errno.EADDRINUSE:
+            raise
+        sys.exit(
+            f"Port {PORT} is already in use - the scan agent is probably "
+            "already running in another window. Use that one."
+        )
+
+    print("Akanksha scan agent", flush=True)
+    print(f"  listening on  http://127.0.0.1:{PORT}", flush=True)
+    if SCAN_SCRIPT is None:
+        print(f"  scan script   none for {sys.platform} - scanning will be refused", flush=True)
+    else:
+        print(f"  scan script   {SCAN_SCRIPT}  ({'found' if SCAN_SCRIPT.exists() else 'MISSING'})", flush=True)
+    print(f"  accepts       {', '.join(sorted(ALLOWED_ORIGINS))}", flush=True)
+    print("\n  Leave this window open while scanning. Ctrl+C to stop.\n", flush=True)
+    server.serve_forever()
 
 
 if __name__ == "__main__":

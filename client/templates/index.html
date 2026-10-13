@@ -535,7 +535,7 @@
         '<span class="auto-row-id"></span>' +
         '<span class="auto-row-detail">Checking database…</span>';
       row.querySelector(".auto-row-page").textContent =
-        "Page " + (page.page_number || autoResults.children.length + 1);
+        "Page " + (page.display_page || page.page_number || autoResults.children.length + 1);
       row.querySelector(".auto-row-id").textContent = page.student_id || "unreadable";
       autoResults.hidden = false;
       autoResults.appendChild(row);
@@ -1139,6 +1139,7 @@
     // uploaded PDF - the server hands back the identical page list, so the
     // automatic loop below does not need to know where the pages came from.
     async function scanNow() {
+      if (scanAgentReady) return scanViaAgent();
       resetBatchState();
       scanBtn.disabled = true;
       submitBtn.disabled = true;
@@ -1253,6 +1254,129 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ job_id: jobId }),
           }).catch(() => {});
+        }
+      }
+    }
+
+    // ---- scanning through the scan agent on this computer -----------------
+    // A server cannot reach a scanner plugged into someone's laptop, so when
+    // tools/scan_agent.py is running on this machine (Windows or Mac), Scan
+    // now asks it for the pages and uploads each one here to be read - the
+    // same /api/extract an uploaded photo goes through, so confirming and
+    // saving work exactly as they do for a file.
+    const SCAN_AGENT = "http://127.0.0.1:8765";
+    let scanAgentReady = false;
+
+    async function detectScanAgent() {
+      try {
+        const response = await fetch(SCAN_AGENT + "/health", {
+          signal: AbortSignal.timeout(1500),
+        });
+        const health = await response.json();
+        if (health.agent !== "akanksha-scan-agent" || !health.scan_script) return;
+        scanAgentReady = true;
+        scanBtn.hidden = false;
+      } catch (_) {
+        // No agent on this machine - leave Scan now as the server decided.
+      }
+    }
+
+    function jpegFromBase64(base64) {
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+      return new Blob([bytes], { type: "image/jpeg" });
+    }
+
+    async function readAgentPage(number, base64) {
+      const body = new FormData();
+      body.append("file", jpegFromBase64(base64), `page-${String(number).padStart(3, "0")}.jpg`);
+      try {
+        const response = await fetch(API_BASE + "/api/extract", { method: "POST", body });
+        const page = await response.json();
+        if (!response.ok) {
+          return { student_id: "", display_page: number, error: page.error || "Could not read this page." };
+        }
+        // Each page is stashed on its own, so page_number stays 1 - that is
+        // what /api/confirm needs to find the image again.
+        page.display_page = number;
+        return page;
+      } catch (error) {
+        return { student_id: "", display_page: number, error: error.message };
+      }
+    }
+
+    async function scanViaAgent() {
+      resetBatchState();
+      scanBtn.disabled = true;
+      submitBtn.disabled = true;
+      showLoader(
+        "Starting the scanner…",
+        "Feed the stack face down. Reading begins once the pages come through."
+      );
+
+      let jobId = null;
+      try {
+        const started = await fetch(SCAN_AGENT + "/scan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        });
+        const startData = await started.json();
+        if (!started.ok) throw new Error(startData.error || "The scanner did not start.");
+        jobId = startData.job;
+
+        filesLoading = true;
+        let read = 0;
+        let finished = false;
+        let scanError = null;
+        while (!finished) {
+          const response = await fetch(
+            `${SCAN_AGENT}/pages?job=${encodeURIComponent(jobId)}&after=${read}`
+          );
+          const batch = await response.json();
+          if (!response.ok) throw new Error(batch.error || "Lost track of the scan.");
+          finished = Boolean(batch.finished);
+          scanError = batch.error || null;
+
+          for (const captured of batch.pages || []) {
+            updateLoader(
+              `Reading form ${captured.page}…`,
+              read,
+              finished ? read + batch.pages.length : 0,
+              "Scanned pages are being read."
+            );
+            appendPages([await readAgentPage(captured.page, captured.jpeg_base64)]);
+            read = captured.page;
+          }
+
+          if (!finished) {
+            if (read === 0) {
+              updateLoader("Feeding the stack…", 0, 0, "Waiting for the scanner.");
+            }
+            await new Promise((resolve) => setTimeout(resolve, 800));
+          }
+        }
+
+        filesLoading = false;
+        if (read === 0) throw new Error(scanError || "The scanner returned no pages.");
+        maybeFinishIfWaiting();
+        if (!autoModeOn()) {
+          statusText.textContent = "Please confirm the Student ID below.";
+        }
+      } catch (error) {
+        filesLoading = false;
+        statusEl.hidden = false;
+        statusEl.className = "status error";
+        statusText.textContent =
+          error instanceof TypeError
+            ? "Could not reach the scan agent on this computer. Is it still running?"
+            : error.message;
+      } finally {
+        hideLoader();
+        scanBtn.disabled = false;
+        submitBtn.disabled = selectedFiles.length === 0;
+        if (jobId) {
+          fetch(`${SCAN_AGENT}/finish?job=${encodeURIComponent(jobId)}`, { method: "POST" })
+            .catch(() => {});
         }
       }
     }
@@ -1591,6 +1715,7 @@ async function requestStop(force) {
     if (inboxPanel) loadInboxStatus();
 
     scanBtn.addEventListener("click", scanNow);
+    detectScanAgent();
 
     form.addEventListener("submit", (event) => {
       event.preventDefault();

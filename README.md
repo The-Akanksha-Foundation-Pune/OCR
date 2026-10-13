@@ -63,6 +63,28 @@ or with an unverified Google email, gets bounced back to `/login` with an error.
 2. Choose a CamScanner export or printer scan.
 3. Click **Extract Student ID**.
 
+## Scan now from your own computer (Windows or Mac)
+
+The live server cannot reach a scanner plugged into your laptop, so a small
+helper runs on the scanning machine and the Scanner page talks to it. When the
+helper is running, a **Scan now** button appears on the page. Pages are read,
+looked up and saved exactly as uploads are.
+
+Mac (one-time setup, then start the helper each session):
+
+```bash
+brew install --cask naps2
+python3 tools/scan_mac.py --list
+python3 tools/scan_agent.py
+```
+
+`--list` should show your scanner. If it does not, install the scanner's Mac
+driver and check that it appears in Image Capture. Use Chrome, and allow
+"access to devices on your local network" if Chrome asks. On a Mac, the pages
+arrive together once the whole stack has been fed.
+
+Windows: `python tools/scan_agent.py` (uses `tools/scan.ps1`).
+
 ## API
 
 ```powershell
