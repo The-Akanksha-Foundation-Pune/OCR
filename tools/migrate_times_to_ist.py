@@ -17,7 +17,13 @@ the rows written before that by +05:30, so old and new rows read the same way.
     python tools/migrate_times_to_ist.py --apply --before "2026-10-28 06:00:00"
         shift every value earlier than the cut-off by +05:30, all tables in
         ONE transaction - either every column moves or none does. Asks you
-        to type SHIFT first (--yes skips the question).
+        to type SHIFT first (--yes skips the question). The old value of
+        every row it moves is written to a JSON backup first (--backup), so
+        the shift can be undone exactly.
+
+    --skip-log-ids 230,237
+        leave these ocr_scan_log rows alone (created_at and reviewed_at) -
+        rows already written on India time, e.g. by a laptop running the app.
 
 Run it from the project root with the app's virtualenv, on a machine whose
 .env points at the database to fix.
@@ -40,9 +46,10 @@ READ THIS BEFORE USING --apply
 
 * active_student_data is a shared warehouse table, not this app's own.
   Before shifting scanned_at, confirm no other system reads it as UTC or
-  writes it itself. The dry run also warns when the table has a column that
-  MySQL bumps on every update (ON UPDATE CURRENT_TIMESTAMP), because the
-  shift would then touch that column on every row it moves.
+  writes it itself. Where a table has a column MySQL bumps on every update
+  (ON UPDATE CURRENT_TIMESTAMP), the shift sets that column to its own value
+  in the same UPDATE, which is how MySQL is told to leave it alone - so the
+  warehouse's own change stamp does not move.
 
 * scanned_at was written by SQL NOW(), which follows the MySQL session time
   zone. The dry run checks that zone, and if it is not UTC the column was
@@ -58,6 +65,7 @@ READ THIS BEFORE USING --apply
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -93,6 +101,18 @@ def _parse_cutoff(text: str) -> datetime:
         raise argparse.ArgumentTypeError(
             f'use the form "YYYY-MM-DD HH:MM:SS", not {text!r}'
         ) from None
+
+
+def _parse_ids(text: str) -> tuple[int, ...]:
+    try:
+        ids = tuple(sorted({int(part) for part in text.split(",") if part.strip()}))
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"use row ids separated by commas, e.g. 230,237 - not {text!r}"
+        ) from None
+    if not ids:
+        raise argparse.ArgumentTypeError("give at least one row id")
+    return ids
 
 
 def _session_offset_minutes(cur) -> int:
@@ -140,10 +160,17 @@ def _auto_update_columns(cur, table: str) -> list[str]:
     return [row["name"] for row in cur.fetchall() or []]
 
 
-def _where(column: str, cutoff: datetime | None) -> tuple[str, tuple]:
-    if cutoff is None:
-        return f"`{column}` IS NOT NULL", ()
-    return f"`{column}` IS NOT NULL AND `{column}` < %s", (cutoff,)
+def _where(
+    table: str, column: str, cutoff: datetime | None, skip_log_ids: tuple[int, ...] = ()
+) -> tuple[str, tuple]:
+    clauses, params = [f"`{column}` IS NOT NULL"], []
+    if cutoff is not None:
+        clauses.append(f"`{column}` < %s")
+        params.append(cutoff)
+    if skip_log_ids and table == "ocr_scan_log":
+        clauses.append(f"`id` NOT IN ({', '.join(['%s'] * len(skip_log_ids))})")
+        params.extend(skip_log_ids)
+    return " AND ".join(clauses), tuple(params)
 
 
 def _fmt(value) -> str:
@@ -152,12 +179,28 @@ def _fmt(value) -> str:
     return "NULL" if value is None else str(value)
 
 
-def plan(cur, cutoff: datetime | None) -> list[tuple[str, str, int]]:
-    """Print what would change and return the (table, column, rows) to shift."""
+def plan(
+    cur, cutoff: datetime | None, skip_log_ids: tuple[int, ...] = ()
+) -> list[tuple[str, str, str, int, list[str]]]:
+    """Print what would change and return what to shift:
+    (table, column, key column, rows, columns MySQL would bump on update)."""
     offset = _session_offset_minutes(cur)
+    if skip_log_ids:
+        cur.execute(
+            f"SELECT `id`, `created_at`, `reviewed_at`, `confirmed_student_id` FROM `ocr_scan_log` "
+            f"WHERE `id` IN ({', '.join(['%s'] * len(skip_log_ids))}) ORDER BY `id`",
+            skip_log_ids,
+        )
+        found = cur.fetchall() or []
+        print(f"Skipping {len(skip_log_ids)} ocr_scan_log row(s) by id, {len(found)} of them present:")
+        for row in found:
+            print(
+                f"    id={row['id']}  created_at {_fmt(row['created_at'])}  "
+                f"reviewed_at {_fmt(row['reviewed_at'])}  {row['confirmed_student_id']}"
+            )
     print()
 
-    todo: list[tuple[str, str, int]] = []
+    todo: list[tuple[str, str, str, int, list[str]]] = []
     warned_tables: set[str] = set()
     for table, column, key, from_sql_now in TARGETS:
         label = f"{table}.{column}"
@@ -180,16 +223,15 @@ def plan(cur, cutoff: datetime | None) -> list[tuple[str, str, int]]:
                 "  ! not InnoDB: this table cannot take part in the transaction, "
                 "so a failure part-way would leave it shifted"
             )
-        if table not in warned_tables:
+        bumped = [name for name in _auto_update_columns(cur, table) if name != column]
+        if bumped and table not in warned_tables:
             warned_tables.add(table)
-            bumped = [name for name in _auto_update_columns(cur, table) if name != column]
-            if bumped:
-                print(
-                    f"  ! {', '.join(bumped)} is ON UPDATE CURRENT_TIMESTAMP: "
-                    "shifting would also reset it on every row moved"
-                )
+            print(
+                f"  {', '.join(bumped)} is ON UPDATE CURRENT_TIMESTAMP: the shift "
+                "sets it to its own value so MySQL leaves it unchanged"
+            )
 
-        where, params = _where(column, cutoff)
+        where, params = _where(table, column, cutoff, skip_log_ids)
         cur.execute(f"SELECT COUNT(*) AS c FROM `{table}` WHERE {where}", params)
         count = int((cur.fetchone() or {}).get("c") or 0)
         print(f"  {count} row(s) would change")
@@ -226,24 +268,64 @@ def plan(cur, cutoff: datetime | None) -> list[tuple[str, str, int]]:
         print()
 
         if count:
-            todo.append((table, column, count))
+            todo.append((table, column, key, count, bumped))
     return todo
 
 
-def apply(conn, todo: list[tuple[str, str, int]], cutoff: datetime) -> None:
-    """Shift every planned column in one transaction."""
+def apply(
+    conn,
+    todo: list[tuple[str, str, str, int, list[str]]],
+    cutoff: datetime,
+    skip_log_ids: tuple[int, ...],
+    backup_path: Path,
+) -> None:
+    """Shift every planned column in one transaction.
+
+    The rows are locked and their old values written to backup_path before
+    anything is updated, and every UPDATE must touch exactly the rows that
+    were locked - otherwise the whole transaction is rolled back.
+    """
     conn.begin()
     try:
+        backup: dict[str, list[dict]] = {}
         with conn.cursor() as cur:
-            for table, column, expected in todo:
-                where, params = _where(column, cutoff)
+            for table, column, key, _planned, _bumped in todo:
+                where, params = _where(table, column, cutoff, skip_log_ids)
+                cur.execute(
+                    f"SELECT `{key}` AS k, `{column}` AS v FROM `{table}` WHERE {where} FOR UPDATE",
+                    params,
+                )
+                backup[f"{table}.{column}"] = [
+                    {"key": key, "value": row["k"], "old": _fmt(row["v"])}
+                    for row in cur.fetchall() or []
+                ]
+            backup_path.write_text(
+                json.dumps(
+                    {"cutoff": _fmt(cutoff), "shift_minutes": SHIFT_MINUTES,
+                     "skip_log_ids": list(skip_log_ids), "rows": backup},
+                    indent=1, default=str,
+                ),
+                encoding="utf-8",
+            )
+            print(f"Backup of the old values: {backup_path}")
+
+            for table, column, _key, _planned, bumped in todo:
+                where, params = _where(table, column, cutoff, skip_log_ids)
+                # Assigning an ON UPDATE column its own value is what stops
+                # MySQL stamping it with now.
+                keep = "".join(f", `{name}` = `{name}`" for name in bumped)
                 cur.execute(
                     f"UPDATE `{table}` "
-                    f"SET `{column}` = `{column}` + INTERVAL {SHIFT_MINUTES} MINUTE "
+                    f"SET `{column}` = `{column}` + INTERVAL {SHIFT_MINUTES} MINUTE{keep} "
                     f"WHERE {where}",
                     params,
                 )
-                print(f"  {table}.{column}: shifted {cur.rowcount} row(s) (planned {expected})")
+                locked = len(backup[f"{table}.{column}"])
+                print(f"  {table}.{column}: shifted {cur.rowcount} row(s) (locked {locked})")
+                if cur.rowcount != locked:
+                    raise RuntimeError(
+                        f"{table}.{column}: updated {cur.rowcount} row(s) but locked {locked}"
+                    )
         conn.commit()
     except Exception:
         conn.rollback()
@@ -266,6 +348,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--yes", action="store_true", help="with --apply, do not ask to confirm"
+    )
+    parser.add_argument(
+        "--skip-log-ids",
+        type=_parse_ids,
+        default=(),
+        help="comma-separated ocr_scan_log ids to leave alone (already on India time)",
+    )
+    parser.add_argument(
+        "--backup",
+        type=Path,
+        help="where --apply writes the old values (default: "
+        "ist-shift-backup-<time>.json in the current folder)",
     )
     args = parser.parse_args(argv)
 
@@ -291,12 +385,12 @@ def main(argv: list[str] | None = None) -> int:
                     cur.execute("SET SESSION TRANSACTION READ ONLY")
                 except Exception as exc:  # noqa: BLE001
                     print(f"(could not make the session read-only: {exc})")
-                plan(cur, args.before)
+                plan(cur, args.before, args.skip_log_ids)
             print("Dry run only. Nothing was written.")
             return 0
 
         with conn.cursor() as cur:
-            todo = plan(cur, args.before)
+            todo = plan(cur, args.before, args.skip_log_ids)
         # The plan's SELECTs opened a transaction; end it so the shift runs
         # in a fresh one of its own.
         conn.rollback()
@@ -305,13 +399,16 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if not args.yes:
-            total = sum(count for _table, _column, count in todo)
+            total = sum(count for _table, _column, _key, count, _bumped in todo)
             answer = input(f"Type SHIFT to move {total} value(s) forward by 5h30m: ")
             if answer.strip() != "SHIFT":
                 print("Not confirmed. Nothing was written.")
                 return 1
 
-        apply(conn, todo, args.before)
+        backup_path = args.backup or Path(
+            f"ist-shift-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+        )
+        apply(conn, todo, args.before, args.skip_log_ids, backup_path)
         print("Done. Do not run this again.")
         return 0
     finally:
