@@ -10,12 +10,13 @@ and Mac.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from flask import Blueprint, jsonify, request
 
 from server.services import batch_store, drive_inbox
 from server.services.auth import current_user, require_login
+from server.services.clock import now_ist
 from server.services.debug_log import debug_log
 from server.services.student_lookup import school_progress
 
@@ -33,7 +34,9 @@ def _me() -> str:
 
 def _watcher_state() -> dict:
     seen = batch_store.watcher_last_seen()
-    alive = bool(seen and datetime.now() - seen < WATCHER_STALE_AFTER)
+    # The watcher stamps last_seen from the same IST clock, so this compares
+    # like with like wherever either process happens to run.
+    alive = bool(seen and now_ist() - seen < WATCHER_STALE_AFTER)
     return {"alive": alive, "last_seen": seen.isoformat(sep=" ", timespec="seconds") if seen else None}
 
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from server.services.clock import now_ist
 from server.services.debug_log import debug_log
 from server.services.student_lookup import get_connection
 
@@ -90,7 +91,7 @@ def open_batch(
             cur.execute(
                 f"UPDATE {BATCH_TABLE} SET closed_at = %s "
                 f"WHERE folder_id = %s AND closed_at IS NULL",
-                (datetime.now(), folder_id),
+                (now_ist(), folder_id),
             )
             cur.execute(
                 f"""
@@ -99,7 +100,7 @@ def open_batch(
                 VALUES (%s, %s, %s, %s, %s, %s)
                 """,
                 (folder_id, owner_email, school or None, location or None,
-                 opened_by or None, datetime.now()),
+                 opened_by or None, now_ist()),
             )
             batch_id = int(cur.lastrowid)
         conn.commit()
@@ -119,7 +120,7 @@ def close_batch(batch_id: int) -> bool:
         with conn.cursor() as cur:
             cur.execute(
                 f"UPDATE {BATCH_TABLE} SET closed_at = %s WHERE id = %s AND closed_at IS NULL",
-                (datetime.now(), batch_id),
+                (now_ist(), batch_id),
             )
             closed = cur.rowcount > 0
         conn.commit()
@@ -229,7 +230,7 @@ def heartbeat(host: str = "") -> None:
                 INSERT INTO {HEARTBEAT_TABLE} (id, last_seen, host) VALUES (1, %s, %s)
                 ON DUPLICATE KEY UPDATE last_seen = VALUES(last_seen), host = VALUES(host)
                 """,
-                (datetime.now(), host or None),
+                (now_ist(), host or None),
             )
         conn.commit()
     finally:

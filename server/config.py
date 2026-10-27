@@ -64,15 +64,6 @@ INBOX_POLL_SECONDS = int(os.getenv("INBOX_POLL_SECONDS", "5"))
 GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 GOOGLE_OAUTH_SCOPES = f"openid email profile {GOOGLE_DRIVE_SCOPE}"
 
-# Scanning straight from the app. The name is matched against what WIA
-# reports, and comes from config rather than the request so a browser can
-# never choose what gets executed.
-SCANNER_NAME = os.getenv("SCANNER_NAME", "SP-1130N")
-SCAN_SCRIPT = BASE_DIR / "tools" / "scan.ps1"
-# A full ADF stack takes a while to feed; well past that we assume a jam
-# or a wedged driver rather than a slow scan.
-SCAN_TIMEOUT_SECONDS = int(os.getenv("SCAN_TIMEOUT_SECONDS", "600"))
-
 # TrOCR model for handwritten English alphanumeric IDs.
 #
 # Off by default: on real Fujitsu scans it was the slowest recogniser by a

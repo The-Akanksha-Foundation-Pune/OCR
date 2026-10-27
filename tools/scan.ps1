@@ -28,6 +28,7 @@ param(
     [string]$OutFile = "",
     [string]$StreamDir = "",
     [string]$Scanner = "",
+    [string]$DeviceId = "",
     [switch]$Flatbed,
     [switch]$Duplex,
     [int]$Dpi = 300,
@@ -37,6 +38,36 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# Stream mode promises the caller one marker file whatever happens. failed.txt
+# is read as plain UTF-8, and Set-Content -Encoding utf8 in Windows
+# PowerShell 5.1 puts a byte-order mark in front, so write the bytes directly
+# - to a .part name first, so the reader never sees half a message.
+function Write-StreamFailure([string]$Message) {
+    if (-not $StreamDir) { return }
+    try {
+        [System.IO.Directory]::CreateDirectory($StreamDir) | Out-Null
+        $marker = Join-Path $StreamDir "failed.txt"
+        # The first failure is the one worth reporting; the same error
+        # rethrown on its way out must not replace it.
+        if (Test-Path -LiteralPath $marker) { return }
+        $partial = "$marker.part"
+        $noBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($partial, $Message, $noBom)
+        Move-Item -LiteralPath $partial -Destination $marker -Force
+    } catch {
+        Write-Host ("  ! could not write failed.txt: {0}" -f $_.Exception.Message) -ForegroundColor Yellow
+    }
+}
+
+# Any error not handled below - no scanner, no match for -Scanner, a scanner
+# that will not connect - ends up here. In stream mode it writes failed.txt
+# before the script exits non-zero, rather than leaving the caller polling a
+# folder that will never finish.
+trap {
+    Write-StreamFailure $_.Exception.Message
+    break
+}
 
 # WIA property ids and the values we care about
 $WIA_HANDLING_SELECT = 3088   # 1 = feeder, 2 = flatbed
@@ -131,12 +162,36 @@ function Get-ScannerName($DeviceInfo) {
     return ($DeviceInfo.Properties | Where-Object { $_.Name -eq "Name" }).Value
 }
 
-if ($Scanner) {
-    $matched = @($scanners | Where-Object { (Get-ScannerName $_) -like "*$Scanner*" })
+# The scan helper also passes WIA's own id for the scanner. Two of the same
+# model side by side share a name but never an id, so the id is tried first;
+# the name stays for when the id has changed since the helper's check.
+$byId = @()
+if ($DeviceId) {
+    $byId = @($scanners | Where-Object { [string]$_.DeviceID -eq $DeviceId })
+}
+
+if ($byId.Count -gt 0) {
+    $info = $byId[0]
+} elseif ($Scanner) {
+    # The scan helper passes the exact name WIA reported, so an exact match
+    # wins. Failing that, part of the name will do ("SP-1130N" for "FUJITSU
+    # SP-1130N") - compared as plain text, because to -like a name with
+    # [brackets] in it is a wildcard pattern and matches nothing.
+    $matched = @($scanners | Where-Object { (Get-ScannerName $_) -eq $Scanner })
+    if ($matched.Count -eq 0) {
+        $matched = @($scanners | Where-Object {
+            ([string](Get-ScannerName $_)).IndexOf($Scanner, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+        })
+    }
     if ($matched.Count -eq 0) {
         Write-Host "No scanner matching '$Scanner'. Available:" -ForegroundColor Yellow
         foreach ($s in $scanners) { Write-Host ("  " + (Get-ScannerName $s)) }
         throw "No scanner matched -Scanner '$Scanner'."
+    }
+    if ($DeviceId -and $matched.Count -gt 1) {
+        # The scanner asked for by id is not there any more, and its name
+        # alone would silently pick one of several - possibly the wrong one.
+        throw "The chosen scanner could not be found again, and more than one scanner is called '$Scanner'. Press Check again."
     }
     $info = $matched[0]
 } elseif ($scanners.Count -eq 1) {
@@ -180,13 +235,18 @@ if ($streaming) {
     }
 }
 
-if (-not $OutFile) {
-    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-    $OutFile = Join-Path (Join-Path $PSScriptRoot "..\data\samples") "scan-$stamp.pdf"
+# The PDF and its folder only matter outside stream mode. A streamed scan
+# leaves its pages in $StreamDir, and the scan helper runs this from wherever
+# it was unpacked, where ..\data\samples is nobody's folder.
+if (-not $streaming) {
+    if (-not $OutFile) {
+        $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+        $OutFile = Join-Path (Join-Path $PSScriptRoot "..\data\samples") "scan-$stamp.pdf"
+    }
+    $OutFile = [System.IO.Path]::GetFullPath($OutFile)
+    $outDir = Split-Path $OutFile -Parent
+    if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir -Force | Out-Null }
 }
-$OutFile = [System.IO.Path]::GetFullPath($OutFile)
-$outDir = Split-Path $OutFile -Parent
-if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir -Force | Out-Null }
 
 $work = if ($streaming) { $StreamDir } else {
     Join-Path $env:TEMP ("wiascan-" + [System.Guid]::NewGuid().ToString("N"))
@@ -206,10 +266,10 @@ $pages = @()
     $useDpi = $Dpi
     if ($allowed.Count -gt 0 -and ($allowed -notcontains $Dpi)) {
         $useDpi = ($allowed | Sort-Object)[0]
-        if ($n -eq 1) {
-            Write-Host ("  ! {0} DPI not supported (offers {1}); using {2}" `
-                -f $Dpi, ($allowed -join "/"), $useDpi) -ForegroundColor Yellow
-        }
+        # This runs once, before the page loop, so the warning needs no
+        # first-page check - one keyed on $n never fired, $n not being set yet.
+        Write-Host ("  ! {0} DPI not supported (offers {1}); using {2}" `
+            -f $Dpi, ($allowed -join "/"), $useDpi) -ForegroundColor Yellow
     }
     Set-WiaProperty $item.Properties $WIA_XRES $useDpi | Out-Null
     Set-WiaProperty $item.Properties $WIA_YRES $useDpi | Out-Null
@@ -290,6 +350,27 @@ try {
         if ($Flatbed) { break }
     }
 
+    # The loop only runs past $MaxPages when it was never stopped by an
+    # empty feeder. A stack of exactly $MaxPages pages ends that way too, so
+    # ask the feeder before calling it cut off. A driver that cannot say is
+    # taken as having paper left: a whole stack reported as cut off costs a
+    # look, a cut-off one reported as whole loses pages.
+    $paperLeft = $false
+    if ((-not $Flatbed) -and $n -gt $MaxPages) {
+        $feeder = $null
+        try { $feeder = Get-WiaProperty $device.Properties $WIA_HANDLING_STATUS } catch {}
+        $paperLeft = ($null -eq $feeder) -or (($feeder -band 1) -ne 0)
+    }
+    if ($paperLeft) {
+        $cutOff = "The stack was cut off at {0} pages - the most one scan will take. Scan the rest of the stack separately." -f $MaxPages
+        if ($streaming) {
+            # Not done.txt: a stack that stopped short must not read as whole.
+            # The pages so far stay in the stream folder for the caller.
+            throw $cutOff
+        }
+        Write-Host ("  ! {0}" -f $cutOff) -ForegroundColor Yellow
+    }
+
     if ($streaming) {
         Set-Content -Path (Join-Path $StreamDir "done.txt") `
             -Value ("{0}" -f $pages.Count) -Encoding ascii
@@ -320,14 +401,12 @@ try {
     }
 }
 catch {
-    if ($streaming) {
-        Set-Content -Path (Join-Path $StreamDir "failed.txt") `
-            -Value $_.Exception.Message -Encoding utf8
-    }
+    Write-StreamFailure $_.Exception.Message
     # A scan is expensive to repeat - if anything downstream of the capture
     # fails, keep the pages rather than making the operator feed the stack
-    # through again.
-    if ($pages.Count -gt 0) {
+    # through again. Streamed pages are already safe in $StreamDir, where
+    # the caller reads them.
+    if ((-not $streaming) -and $pages.Count -gt 0) {
         $rescue = Join-Path $outDir ("rescued-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
         New-Item -ItemType Directory -Path $rescue -Force | Out-Null
         Copy-Item $pages -Destination $rescue -ErrorAction SilentlyContinue

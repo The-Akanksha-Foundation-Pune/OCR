@@ -14,3 +14,4 @@ logs/
 
 # Cloud service-account keys - never commit these
 secrets/
+.env.backup-*

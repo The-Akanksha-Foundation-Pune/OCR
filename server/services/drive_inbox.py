@@ -24,6 +24,7 @@ This module only knows Drive. What to do with a page is the watcher's job.
 from __future__ import annotations
 
 import time
+from datetime import timezone
 from typing import Any
 
 import requests
@@ -78,8 +79,14 @@ def _creds() -> service_account.Credentials:
 def _token() -> str:
     creds = _creds()
     # Tokens last an hour; refresh a little early rather than racing expiry.
+    # google-auth keeps expiry as a NAIVE UTC datetime, and .timestamp() on a
+    # naive value assumes the machine's own zone - on an IST laptop that put
+    # every token 5.5 hours in the past and refreshed it on every call.
+    expiry = creds.expiry
+    if expiry is not None and expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
     if not creds.valid or (
-        creds.expiry is not None and (creds.expiry.timestamp() - time.time()) < 120
+        expiry is not None and (expiry.timestamp() - time.time()) < 120
     ):
         creds.refresh(Request())
     return creds.token

@@ -2037,6 +2037,29 @@ tr.resolved {
   font-variant-numeric: tabular-nums;
 }
 
+/* Stop, while a scan from the helper runs - the one control the loader
+   leaves showing. Quiet rather than the blue primary, so it is not taken
+   for a "done" button and pressed by mistake. */
+.page-loader-stop {
+  width: auto;
+  margin: 0;
+  padding: 0.55rem 1.15rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 0.88rem;
+  font-weight: 600;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.page-loader-stop:hover:not(:disabled) {
+  border-color: var(--danger-line);
+  color: var(--danger-ink);
+  box-shadow: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .page-loader-bar.indeterminate .page-loader-fill {
     animation-duration: 3s;
@@ -2130,42 +2153,11 @@ body.is-busy {
   cursor: progress;
 }
 
-/* ---- input methods that are switched off --------------------------- */
-
-/* Take photo and Choose file(s) are off while the scanner is the only
-   supported route. The <label>s have had their `for` removed and the file
-   inputs carry `disabled`, so these styles describe that state rather than
-   creating it - a label styled to look dead would still open a file picker. */
-.action-btn.is-disabled {
-  background: #f8fafc;
-  border-color: var(--line-soft);
-  border-style: dashed;
-  opacity: 0.55;
-  cursor: not-allowed;
-  pointer-events: none;
-  box-shadow: none;
-  transform: none;
-  animation: none;
-}
-
-.action-btn.is-disabled .action-icon {
-  background: #eceae4;
-  color: var(--muted-light);
-}
-
-.action-btn.is-disabled .action-title {
-  color: var(--muted);
-  font-weight: 600;
-}
-
-.action-btn.is-disabled .action-hint {
-  color: var(--muted-light);
-  font-style: italic;
-}
-
 /* ---- scanning through the Drive inbox ------------------------------------ */
+/* Same gap below as the Scanner card above it, so card, inbox and the
+   upload tiles sit evenly spaced whichever of them is showing. */
 .inbox {
-  margin: 1.1rem 0 0.25rem;
+  margin: 1.1rem 0;
   padding: 1rem 1.1rem 1.1rem;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -2241,4 +2233,340 @@ body.is-busy {
   font-size: 0.86rem;
   color: var(--ink);
   font-variant-numeric: tabular-nums;
+}
+
+/* ---- the Scanner card ---------------------------------------------------- */
+
+/* Scanning through the helper on this computer. Drawn like the school
+   picker above it - same border, label and radius - so the two read as
+   consecutive steps, with the scanners as hairline-separated rows in the
+   manner of the History table. */
+.scanner {
+  margin: 0 0 1.1rem;
+  padding: 1rem 1.1rem 1.1rem;
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  min-width: 0;
+  animation: fade-up 0.4s var(--ease) both;
+}
+
+.scanner-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.scanner-head .school-label {
+  margin-bottom: 0;
+}
+
+/* Quiet, like the inbox Stop button - the global button rule would make it
+   a full-width blue slab. */
+.scanner-recheck {
+  flex-shrink: 0;
+  width: auto;
+  margin: 0;
+  padding: 0.36rem 0.85rem;
+  border: 1.5px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 0.8rem;
+  font-weight: 650;
+  box-shadow: none;
+}
+
+.scanner-recheck:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-dark);
+  box-shadow: none;
+}
+
+/* Baseline, not centre: the line can wrap, and the dot belongs to its
+   first line. Same dot colours as the Drive inbox status. */
+.scanner-state {
+  margin: 0.55rem 0 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.86rem;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.scanner-state::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--muted-light);
+}
+
+.scanner-state.is-ok::before   { background: var(--ok); }
+.scanner-state.is-warn::before { background: var(--gold); }
+
+.scanner-state.is-checking {
+  color: var(--muted);
+}
+
+.scanner-state.is-checking::before {
+  animation: scanner-blink 1.2s ease-in-out infinite;
+}
+
+@keyframes scanner-blink {
+  50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scanner-state.is-checking::before { animation: none; }
+}
+
+.scanner-setup {
+  margin-top: 0.55rem;
+}
+
+.scanner-steps {
+  margin: 0;
+  padding-left: 1.3rem;
+  display: grid;
+  gap: 0.3rem;
+  max-width: 62ch;
+  font-size: 0.86rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.scanner-steps li::marker {
+  color: var(--muted-light);
+  font-weight: 700;
+}
+
+.scanner-setup code {
+  padding: 0.05rem 0.35rem;
+  border-radius: 6px;
+  background: var(--line-soft);
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.scanner-link,
+.scanner-fallback a {
+  color: var(--accent-dark);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.scanner-link:hover,
+.scanner-fallback a:hover {
+  color: var(--accent);
+}
+
+.scanner-note {
+  margin: 0.55rem 0 0;
+  max-width: 62ch;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* ---- one row per scanner ---- */
+
+.scanner-devices {
+  list-style: none;
+  margin: 0.85rem 0 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.scanner-device + .scanner-device {
+  border-top: 1px solid var(--line-soft);
+}
+
+.scanner-device-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.7rem 0.85rem;
+  cursor: pointer;
+  transition: background-color 0.15s var(--ease);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.scanner-device.is-ready .scanner-device-main:hover {
+  background: #f8fafc;
+}
+
+.scanner-device.is-ready:has(input:checked) .scanner-device-main {
+  background: var(--accent-light);
+}
+
+.scanner-device.is-ready:has(input:checked) .scanner-device-name {
+  color: var(--accent-ink);
+}
+
+.scanner-device.is-unready .scanner-device-main {
+  cursor: default;
+}
+
+.scanner-device-main input {
+  margin: 0;
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--accent);
+}
+
+.scanner-device-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.scanner-device-name {
+  font-size: 0.92rem;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.scanner-device.is-unready .scanner-device-name {
+  color: var(--muted);
+}
+
+.scanner-device-sub {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.scanner-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.18rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.scanner-chip.is-ready {
+  color: var(--ok-ink);
+  background: var(--ok-bg);
+  border: 1px solid var(--ok-line);
+}
+
+.scanner-chip.is-warn {
+  color: var(--gold-ink);
+  background: var(--gold-light);
+  border: 1px solid var(--gold-line);
+}
+
+/* Indented to line up under the scanner's name, not under the radio. */
+.scanner-device-fix {
+  margin: -0.25rem 0 0;
+  padding: 0 0.85rem 0.75rem calc(0.85rem + 1rem + 0.75rem);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* ---- settings and the scan button ---- */
+
+.scanner-settings {
+  margin-top: 0.85rem;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.scanner-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.scanner-field .school-label {
+  margin-bottom: 0;
+}
+
+.scanner-select {
+  padding: 0.55rem 2.1rem 0.55rem 0.75rem;
+  font-size: 0.88rem;
+  background-position: right 0.65rem center;
+  background-size: 0.95rem;
+}
+
+.scanner-message {
+  margin: 0.85rem 0 0;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--danger-line);
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  color: var(--danger-ink);
+  font-size: 0.86rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* The global button rule already makes this the full-width blue primary;
+   a long scanner name wraps rather than pushing the page sideways. */
+.scanner-go {
+  margin-top: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.scanner-fallback {
+  margin: 0.75rem 0 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* Where the fallback links land - clear of the menu button that floats at
+   the top of the screen on phones. */
+.inbox,
+.action-grid {
+  scroll-margin-top: 1rem;
+}
+
+@media (max-width: 900px) {
+  .inbox,
+  .action-grid {
+    scroll-margin-top: 4.25rem;
+  }
+}
+
+@media (max-width: 560px) {
+  .scanner {
+    padding: 0.9rem 0.9rem 1rem;
+  }
+
+  .scanner-settings {
+    grid-template-columns: 1fr;
+  }
+
+  /* The chip drops under the name rather than squeezing it to a sliver. */
+  .scanner-device-main {
+    grid-template-columns: auto minmax(0, 1fr);
+    row-gap: 0.4rem;
+  }
+
+  .scanner-chip {
+    grid-column: 2;
+    justify-self: start;
+  }
 }

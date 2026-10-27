@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import sys
-from datetime import datetime
 from pathlib import Path
+
+from server.services.clock import now_ist
 
 LOG_DIR = Path(__file__).resolve().parent.parent.parent / "logs"
 LOG_FILE = LOG_DIR / "ocr_debug.log"
@@ -37,7 +38,7 @@ def _safe_print(line: str) -> None:
 
 def debug_log(message: str) -> None:
     """Print and append to logs/ocr_debug.log so debug is always findable."""
-    line = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {message}"
+    line = f"{now_ist().strftime('%Y-%m-%d %H:%M:%S')} | {message}"
     _safe_print(line)
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)

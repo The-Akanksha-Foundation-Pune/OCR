@@ -8,9 +8,9 @@ the History UI and never feeds back into lookups.
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
+from server.services.clock import now_ist
 from server.services.debug_log import debug_log
 from server.services.student_lookup import get_connection
 
@@ -58,6 +58,10 @@ def _ensure_schema() -> None:
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            # The CURRENT_TIMESTAMP default is in the database's own zone
+            # (UTC by default on RDS), so it is never relied on:
+            # log_scan_attempt always passes created_at itself, from the IST
+            # clock.
             cur.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS {LOG_TABLE} (
@@ -169,7 +173,7 @@ def log_scan_attempt(
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
-                    datetime.now(),
+                    now_ist(),
                     confirmed_student_id,
                     1 if found_in_db else 0,
                     matched_student_id,
@@ -308,7 +312,7 @@ def mark_reviewed(
                   AND {REVIEWED_AT_COLUMN} IS NULL
                   AND UPPER(TRIM(matched_student_id)) IN ({slots})
                 """,
-                (datetime.now(), reviewed_by or None, *wanted),
+                (now_ist(), reviewed_by or None, *wanted),
             )
             updated = cur.rowcount
         conn.commit()

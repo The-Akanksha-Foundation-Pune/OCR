@@ -23,6 +23,7 @@ from server.config import (
     MIN_REPAIR_SCORE,
     STUDENT_TABLE,
 )
+from server.services.clock import now_ist
 from server.services.debug_log import debug_log
 from server.services.devanagari import prefix_similarity, split_id
 from server.services.id_shape import shape_variants
@@ -171,13 +172,19 @@ def find_student_by_id(
             )
 
             if should_mark:
+                # Bound from the IST clock rather than SQL NOW(), which reads
+                # the session's zone - UTC by default on RDS. That keeps
+                # scanned_at on the same clock as every other time this app
+                # writes, without changing the MySQL time zone (which would
+                # also move NOW() and TIMESTAMP columns for every query on
+                # the connection).
                 cur.execute(
                     f"""
                     UPDATE {STUDENT_TABLE}
-                    SET scanned_at = NOW()
+                    SET scanned_at = %s
                     WHERE UPPER(TRIM(student_id)) = UPPER(%s)
                     """,
-                    (matched_id,),
+                    (now_ist(), matched_id),
                 )
                 conn.commit()
                 debug_log(f"[DB] scanned_at updated for {matched_id!r}")

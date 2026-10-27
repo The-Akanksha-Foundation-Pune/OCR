@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import re
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +19,7 @@ from server.config import (
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
 )
+from server.services.clock import now_ist
 from server.services.debug_log import debug_log
 
 DRIVE_API = "https://www.googleapis.com/drive/v3"
@@ -59,7 +59,7 @@ def upload_scan_to_drive(
             parent_id="root",
             cache_key="drive_ocr_folder_id",
         )
-        date_folder_name = datetime.now().strftime("%Y-%m-%d")
+        date_folder_name = now_ist().strftime("%Y-%m-%d")
         date_folder_id = _ensure_today_folder(
             access_token,
             parent_id=ocr_folder_id,
@@ -72,7 +72,7 @@ def upload_scan_to_drive(
             stem = _safe_drive_stem(display_name)
             drive_name = f"{stem}{suffix}" if not Path(stem).suffix else stem
         else:
-            stamp = datetime.now().strftime("%H%M%S")
+            stamp = now_ist().strftime("%H%M%S")
             drive_name = f"{stamp}_{filename}"
 
         # 1) Upload bytes first (lands in Drive root by default)

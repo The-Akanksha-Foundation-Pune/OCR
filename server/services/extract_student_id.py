@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +19,7 @@ from server.config import (
     LAYOUT_TRUST_ERROR,
     USE_TROCR,
 )
+from server.services.clock import now_ist
 from server.services.debug_log import debug_log
 from server.services.deskew import deskew
 from server.services.field_detector import (
@@ -647,7 +647,7 @@ def _read_id_from_crop(
 def _save_debug_crop(crop_bgr: np.ndarray, tag: str) -> None:
     try:
         DEBUG_CROP_DIR.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%H%M%S")
+        stamp = now_ist().strftime("%H%M%S")
         path = DEBUG_CROP_DIR / f"{stamp}_{tag}.jpg"
         cv2.imwrite(str(path), crop_bgr)
         debug_log(f"[DEBUG] saved crop {path}")
