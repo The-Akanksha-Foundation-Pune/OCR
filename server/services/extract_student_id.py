@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,15 @@ import numpy as np
 
 from server.config import (
     BASE_DIR,
+    BLANK_ID_INK_RATIO,
     BLANK_PAGE_INK_RATIO,
+    DECLARATION_HEADING_PATH,
+    DECLARATION_MATCH_MAX_X_FRACTION,
+    DECLARATION_MATCH_MIN,
+    DECLARATION_PHRASES,
+    DECLARATION_TEMPLATE_PAGE_WIDTH,
+    DECLARATION_TOP_FRACTION,
+    DECLARATION_WORK_WIDTH,
     FAST_MODE,
     VISION_CONFIDENCE_BONUS,
     LAYOUT_TRUST_CONFIDENCE,
@@ -35,6 +44,7 @@ from server.services.form_layout import identify_form
 from server.services.vision_ocr import is_configured as vision_configured
 from server.services.vision_ocr import recognize_with_vision
 from server.services.handwriting_ocr import (
+    id_box_ink_ratio,
     looks_like_student_id,
     recognize_devanagari_id,
     recognize_handwritten_id,
@@ -83,6 +93,12 @@ class ExtractResult:
     # student_id. Without it the UI cannot show "read X, saved Y", which is
     # exactly the comparison someone needs to spot a wrong match.
     ocr_student_id: str = ""
+    # Seconds spent on this page. The skip log uses it.
+    elapsed_seconds: float = 0.0
+    # A page that was never going to carry an ID. skip_reason is "blank",
+    # "declaration", or "empty_id". Not an error, and not sent for lookup.
+    skipped: bool = False
+    skip_reason: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -307,6 +323,7 @@ def _log_confirm_attempt(
 def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
     """Pure OCR — never touches the database. Returns the single best raw
     reading so the confirmation modal shows exactly what was scanned."""
+    started = time.perf_counter()
     prepared = preprocess_for_ocr(image_bgr)
 
     # A page with almost no ink is a blank reverse or a separator sheet.
@@ -314,12 +331,13 @@ def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
     # ~27s to conclude what a pixel count answers instantly, and in a
     # 500-form batch those add up to hours.
     if _is_blank_page(prepared):
-        debug_log("[FAST] page is blank - skipped OCR")
-        raise ExtractError(
-            "This page looks blank. If it should have a form on it, check the "
-            "sheet was fed the right way up.",
-            status_code=422,
-        )
+        return _skipped(source, "blank", started)
+
+    # "घोषणा" at the top is enough on its own. Declaration pages sometimes
+    # still fit a form ladder by accident, and that false match used to send
+    # them through every recogniser.
+    if _looks_like_declaration(prepared):
+        return _skipped(source, "declaration", started)
 
     # Which form is this, and where is its value box? Matching the page's
     # ruled lines works on Hindi/Marathi scans, where the printed label is
@@ -334,9 +352,16 @@ def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
         straightened, angle = deskew(prepared)
         if angle != 0.0:
             debug_log(f"[LAYOUT] first pass empty, retrying after deskew {angle:+.2f} deg")
+            if _looks_like_declaration(straightened):
+                return _skipped(source, "declaration", started)
             layout = identify_form(straightened)
             if layout is not None:
                 prepared = straightened
+        if layout is None and _strip_says_declaration(prepared):
+            return _skipped(source, "declaration", started)
+
+    if layout is not None and _id_box_is_empty(prepared, layout):
+        return _skipped(source, "empty_id", started, layout.language)
     # Whether to spend a Devanagari pass on this page. The layout is the
     # only trustworthy signal here: _score_label calls a bare ID token
     # "english" even on a Hindi form, so the per-candidate language would
@@ -485,6 +510,106 @@ def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
         found_in_db=False,
         student=None,
     )
+
+
+def _skipped(
+    source: str, reason: str, started: float, language: str = "unknown"
+) -> ExtractResult:
+    """A page that should not be read. Logged once, and not an error."""
+    elapsed = round(time.perf_counter() - started, 2)
+    debug_log(f"[SKIP] {source} {reason} {elapsed:.2f}s")
+    return ExtractResult(
+        student_id="",
+        confidence=0.0,
+        form_language=language,
+        source=source,
+        message=f"skipped:{reason}",
+        skipped=True,
+        skip_reason=reason,
+        elapsed_seconds=elapsed,
+    )
+
+
+_heading_template: np.ndarray | None = None
+_heading_missing = False
+
+
+def _heading_image() -> np.ndarray | None:
+    """The printed 'घोषणा' crop, loaded once. Missing file means no match."""
+    global _heading_template, _heading_missing
+    if _heading_missing:
+        return None
+    if _heading_template is None:
+        image = cv2.imread(str(DECLARATION_HEADING_PATH), cv2.IMREAD_GRAYSCALE)
+        if image is None:
+            _heading_missing = True
+            debug_log(f"[SKIP] declaration heading image missing: {DECLARATION_HEADING_PATH}")
+            return None
+        _heading_template = image
+    return _heading_template
+
+
+def _top_strip(image_bgr: np.ndarray) -> np.ndarray:
+    """Top of the page, narrowed so a heading match stays cheap."""
+    height, width = image_bgr.shape[:2]
+    strip = image_bgr[: max(1, int(height * DECLARATION_TOP_FRACTION))]
+    if width <= DECLARATION_WORK_WIDTH:
+        return strip
+    scale = DECLARATION_WORK_WIDTH / width
+    return cv2.resize(
+        strip,
+        (DECLARATION_WORK_WIDTH, max(1, int(strip.shape[0] * scale))),
+        interpolation=cv2.INTER_AREA,
+    )
+
+
+def _looks_like_declaration(image_bgr: np.ndarray) -> bool:
+    """True when the printed घोषणा heading sits at the top left."""
+    template = _heading_image()
+    if template is None:
+        return False
+    strip = _top_strip(image_bgr)
+    gray = cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY) if strip.ndim == 3 else strip
+    # The strip is at DECLARATION_WORK_WIDTH. The heading image was cut from
+    # a page DECLARATION_TEMPLATE_PAGE_WIDTH wide, so scale it to match.
+    scale = gray.shape[1] / DECLARATION_TEMPLATE_PAGE_WIDTH
+    tw = max(8, int(template.shape[1] * scale))
+    th = max(8, int(template.shape[0] * scale))
+    if th >= gray.shape[0] or tw >= gray.shape[1]:
+        return False
+    needle = cv2.resize(template, (tw, th), interpolation=cv2.INTER_AREA)
+    scores = cv2.matchTemplate(gray, needle, cv2.TM_CCOEFF_NORMED)
+    _, best, _, where = cv2.minMaxLoc(scores)
+    left_enough = where[0] <= gray.shape[1] * DECLARATION_MATCH_MAX_X_FRACTION
+    return best >= DECLARATION_MATCH_MIN and left_enough
+
+
+def _strip_says_declaration(image_bgr: np.ndarray) -> bool:
+    """RapidOCR on the top strip only, for a page the ladder did not claim.
+
+    A page with no ladder and no heading text keeps the normal read, so a
+    form the layout missed is not dropped.
+    """
+    strip = _top_strip(image_bgr)
+    try:
+        result, _ = get_rapid_ocr()(strip)
+    except Exception as exc:  # noqa: BLE001 - a failed strip read is not a declaration
+        debug_log(f"[SKIP] declaration strip OCR failed: {exc}")
+        return False
+    compact = re.sub(r"\s+", "", "".join(str(item[1]) for item in (result or [])))
+    return any(phrase in compact for phrase in DECLARATION_PHRASES)
+
+
+def _id_box_is_empty(image_bgr: np.ndarray, layout) -> bool:
+    """True when the located Student ID box has no handwriting."""
+    try:
+        crop = crop_value_roi(image_bgr, layout.student_id_roi)
+    except ValueError as exc:
+        debug_log(f"[SKIP] could not crop the ID box: {exc}")
+        return False
+    ratio = id_box_ink_ratio(crop)
+    debug_log(f"[SKIP] id box ink={ratio:.4f} threshold={BLANK_ID_INK_RATIO}")
+    return ratio < BLANK_ID_INK_RATIO
 
 
 def _is_blank_page(image_bgr: np.ndarray) -> bool:

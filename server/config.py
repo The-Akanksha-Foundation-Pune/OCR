@@ -123,6 +123,33 @@ FAST_MODE = os.getenv("FAST_MODE", "1").strip().lower() in ("1", "true", "yes")
 # Below this fraction of dark pixels a page carries no form at all.
 # Real forms measure 4-6%; a blank reverse with bleed-through is under 1%.
 BLANK_PAGE_INK_RATIO = 0.02
+# Student ID box with the printed underline removed. Measured on real scans
+# (28 Oct 2026): an empty box is about 0.006, the faintest written ID about
+# 0.076. Anything below this is empty. At or above it, including a faint
+# pencil line, the page is read normally.
+BLANK_ID_INK_RATIO = float(os.getenv("BLANK_ID_INK_RATIO", "0.02"))
+# A horizontal run this wide, as a fraction of the crop, is the printed rule
+# rather than a letter stroke.
+BLANK_ID_RULE_WIDTH_FRACTION = 0.25
+# Declaration pages ("घोषणा") are recognised from the top of the page only.
+DECLARATION_TOP_FRACTION = 0.15
+DECLARATION_WORK_WIDTH = 900
+# matchTemplate score and how far from the left edge the heading may sit.
+# On the sample set, declaration pages scored 0.75-0.97 at the left;
+# form pages scored at most 0.62.
+DECLARATION_MATCH_MIN = float(os.getenv("DECLARATION_MATCH_MIN", "0.72"))
+DECLARATION_MATCH_MAX_X_FRACTION = 0.25
+# Width of the page the heading image was cropped from, so a 600 DPI scan
+# and a 200 DPI PDF scale the same template.
+DECLARATION_TEMPLATE_PAGE_WIDTH = 1655
+DECLARATION_HEADING_PATH = DATA_DIR / "labels" / "ghoshana.png"
+# Used only when the heading image does not match and the page has no form
+# ladder. RapidOCR is run on the top strip, never the whole page.
+DECLARATION_PHRASES = (
+    "घोषणा",
+    "संमतीची पुष्टी",
+    "सहमति की पुष्टि",
+)
 LAYOUT_TRUST_CONFIDENCE = 0.80
 # LAYOUT_TRUST_ERROR: a rule-ladder match at or under this mean row error has
 # found the form's lines precisely, whichever language it turns out to be.

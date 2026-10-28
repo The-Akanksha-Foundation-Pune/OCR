@@ -9,6 +9,7 @@ import numpy as np
 from PIL import Image
 
 from server.config import (
+    BLANK_ID_RULE_WIDTH_FRACTION,
     MAX_STUDENT_ID_LENGTH,
     MIN_INK_RATIO,
     MIN_OCR_CONFIDENCE,
@@ -167,6 +168,27 @@ def has_handwriting_ink(crop_bgr: np.ndarray) -> bool:
     gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
     ink_ratio = float(np.mean(gray < 150))
     return ink_ratio >= MIN_INK_RATIO
+
+
+def id_box_ink_ratio(crop_bgr: np.ndarray) -> float:
+    """Dark-pixel share of an ID box after the printed underline is removed.
+
+    The underline is a long horizontal run. Letter strokes are shorter, so
+    they stay. An empty box then measures near zero; a written ID does not.
+    """
+    if crop_bgr is None or crop_bgr.size == 0:
+        return 0.0
+    gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
+    ink = np.where(gray < 150, 255, 0).astype(np.uint8)
+    width = ink.shape[1]
+    rule_width = max(15, int(width * BLANK_ID_RULE_WIDTH_FRACTION))
+    rule = cv2.morphologyEx(
+        ink,
+        cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (rule_width, 1)),
+    )
+    writing = cv2.subtract(ink, rule)
+    return float(np.count_nonzero(writing)) / float(writing.size)
 
 
 def looks_like_student_id(text: str) -> bool:
