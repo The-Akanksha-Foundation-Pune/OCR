@@ -24,7 +24,7 @@ from server.blueprints.ocr_routes import (
     _is_allowed,
     _upload_filename,
 )
-from server.services import documents, scan_queue
+from server.services import documents, ocr_worker, scan_queue
 from server.services.auth import current_user, require_login
 from server.services.debug_log import debug_log
 from server.services.extract_student_id import LookupUnavailable
@@ -118,15 +118,25 @@ def scans_api() -> ResponseReturnValue:
 
 @batch_bp.get("/api/batches")
 def batches_api() -> ResponseReturnValue:
-    """The signed-in person's documents by batch, unsorted pages and the queue."""
+    """The signed-in person's documents by batch, unsorted pages and the queue.
+
+    While any of their pages waits for OCR, queue.worker says what the OCR
+    worker is doing (ocr_worker.reported_state): paused for a database
+    outage, say, or not running at all. Those are the only times it is news
+    to them, and the page keeps asking until the pages are read, so what it
+    shows never goes stale.
+    """
     snap = documents.snapshot(_me())
+    queue: dict[str, Any] = dict(snap.queue_counts())
+    if queue.get(scan_queue.STATUS_QUEUED) or queue.get(scan_queue.STATUS_READING):
+        queue["worker"] = ocr_worker.reported_state()
     return (
         jsonify(
             {
                 "batches": snap.batches(_image_url),
                 "unsorted": [page.to_dict(_image_url) for page in snap.unsorted],
                 "pages": [page.to_dict(_image_url) for page in snap.pages],
-                "queue": snap.queue_counts(),
+                "queue": queue,
             }
         ),
         200,

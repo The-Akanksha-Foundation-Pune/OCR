@@ -2459,6 +2459,12 @@ body.is-busy {
   color: var(--danger-ink);
 }
 
+/* OCR paused, or not running: amber, not red - the scans are safe, they
+   are only waiting. */
+.section-status.is-warn {
+  color: var(--gold-ink);
+}
+
 .section-note {
   margin: 0.45rem 0 0;
   max-width: 68ch;

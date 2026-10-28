@@ -76,13 +76,17 @@ _OCR_VARIANTS = str.maketrans(
 )
 
 
-def get_connection(connect_timeout: float | None = None) -> pymysql.connections.Connection:
+def get_connection(
+    connect_timeout: float | None = None, read_timeout: float | None = None
+) -> pymysql.connections.Connection:
     """Open a connection to the student database.
 
     Args:
         connect_timeout: Seconds to wait for the server to answer;
             CONNECT_TIMEOUT_SECONDS when None, as every caller but the
             outage probe wants.
+        read_timeout: Seconds to wait for each reply once connected; None
+            (PyMySQL's default, no limit) for every caller but the probe.
 
     Raises:
         DatabaseNotConfigured: DB_HOST, DB_USER or DB_NAME is unset.
@@ -97,6 +101,8 @@ def get_connection(connect_timeout: float | None = None) -> pymysql.connections.
         database=DB_NAME,
         port=DB_PORT,
         connect_timeout=CONNECT_TIMEOUT_SECONDS if connect_timeout is None else connect_timeout,
+        read_timeout=read_timeout,
+        write_timeout=read_timeout,
         cursorclass=pymysql.cursors.DictCursor,
     )
 
@@ -116,7 +122,10 @@ def probe_database(connect_timeout: float = PROBE_CONNECT_TIMEOUT_SECONDS) -> No
         pymysql.MySQLError: The server could not be reached or refused us.
         OSError: The network failed underneath the connection.
     """
-    conn = get_connection(connect_timeout=connect_timeout)
+    # connect_timeout alone stops covering us once the TCP connection is up:
+    # PyMySQL then waits on each reply with no limit, so a path that accepts
+    # the connection but never answers would hang the paused worker for good.
+    conn = get_connection(connect_timeout=connect_timeout, read_timeout=connect_timeout)
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT 1")

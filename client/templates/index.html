@@ -2184,6 +2184,28 @@
       return m[1] === today ? m[2] : `${m[1]} ${m[2]}`;
     }
 
+    // Why this person's pages are not being read, when the server says its
+    // OCR worker is paused for a database outage or not running at all. The
+    // server only says while they have pages waiting, and the page keeps
+    // asking until those are read, so the line goes as soon as OCR is back.
+    function workerNotice() {
+      const queue = (results.data && results.data.queue) || {};
+      const worker = queue.worker || {};
+      if (worker.state === "paused") {
+        const next = String(worker.next_try || "").match(/[T ](\d{2}:\d{2})/);
+        return (
+          "OCR paused - the student database can't be reached. Your scans are kept and " +
+          "will be read automatically when it's back" +
+          (next ? ` (next try ${next[1]})` : "") +
+          "."
+        );
+      }
+      if (worker.state === "not_running") {
+        return "OCR worker is not running - scans are kept and will be read when it starts.";
+      }
+      return "";
+    }
+
     function receivedRows() {
       const rows = [];
       const shown = new Set();
@@ -2248,9 +2270,12 @@
       if (counts.failed) bits.push(`${counts.failed} failed`);
       if (counts.retry) bits.push(`${counts.retry} not sent yet`);
       if (counts.error) bits.push(`${counts.error} not received`);
+      const counted = bits.length ? capitalise(bits.join(" · ")) + "." : "Nothing scanned yet on this visit.";
+      const notice = workerNotice();
       setLine(
         receivedStatus,
-        bits.length ? capitalise(bits.join(" · ")) + "." : "Nothing scanned yet on this visit."
+        notice ? (bits.length ? `${counted} ${notice}` : notice) : counted,
+        notice ? "section-status is-warn" : "section-status"
       );
 
       const shownRows = rows.slice(0, RECEIVED_ROWS_SHOWN);
