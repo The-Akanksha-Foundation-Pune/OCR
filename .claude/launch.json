@@ -3,15 +3,15 @@
   "configurations": [
     {
       "name": "ocr-dev",
-      "runtimeExecutable": ".venv/Scripts/python.exe",
-      "runtimeArgs": ["run.py"],
+      "runtimeExecutable": "/usr/bin/env",
+      "runtimeArgs": ["PORT=5000", ".venv/bin/python", "run.py"],
       "port": 5000,
       "url": "http://127.0.0.1:5000"
     },
     {
-      "name": "ocr-dev-mac",
-      "runtimeExecutable": "/usr/bin/env",
-      "runtimeArgs": ["PORT=5000", ".venv/bin/python", "run.py"],
+      "name": "ocr-dev-windows",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["run.py"],
       "port": 5000,
       "url": "http://127.0.0.1:5000"
     }

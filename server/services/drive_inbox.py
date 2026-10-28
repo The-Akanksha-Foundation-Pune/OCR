@@ -24,10 +24,11 @@ This module only knows Drive. What to do with a page is the watcher's job.
 from __future__ import annotations
 
 import time
-from datetime import timezone
+from datetime import UTC
 from typing import Any
 
 import requests
+from google.auth.exceptions import GoogleAuthError
 from google.auth.transport.requests import Request
 from google.oauth2 import service_account
 
@@ -84,7 +85,7 @@ def _token() -> str:
     # every token 5.5 hours in the past and refreshed it on every call.
     expiry = creds.expiry
     if expiry is not None and expiry.tzinfo is None:
-        expiry = expiry.replace(tzinfo=timezone.utc)
+        expiry = expiry.replace(tzinfo=UTC)
     if not creds.valid or (
         expiry is not None and (expiry.timestamp() - time.time()) < 120
     ):
@@ -93,14 +94,32 @@ def _token() -> str:
 
 
 def _call(method: str, path: str, **kwargs: Any) -> requests.Response:
+    """One Drive API request.
+
+    Raises:
+        DriveInboxError: Drive refused it, or could not be reached at all. A
+            dropped connection, a timeout or a failed token refresh is as much
+            a Drive failure as a 500: let through raw, it got past every
+            `except DriveInboxError`, and the watcher downloaded and OCR'd a
+            file again on every pass because renaming it "[failed]" had hit a
+            network error.
+    """
     params = dict(kwargs.pop("params", {}) or {})
     params.update(_ALL_DRIVES)
     headers = dict(kwargs.pop("headers", {}) or {})
-    headers["Authorization"] = f"Bearer {_token()}"
-    response = requests.request(
-        method, f"{DRIVE_API}/{path}", params=params, headers=headers,
-        timeout=kwargs.pop("timeout", 60), **kwargs,
-    )
+    try:
+        headers["Authorization"] = f"Bearer {_token()}"
+        response = requests.request(
+            method, f"{DRIVE_API}/{path}", params=params, headers=headers,
+            timeout=kwargs.pop("timeout", 60), **kwargs,
+        )
+    except (requests.RequestException, GoogleAuthError) as exc:
+        # The message ends up in History and on the panel; the detail names
+        # the URL and its query, so it stays in the server log.
+        debug_log(f"[INBOX] Drive {method} {path} failed: {type(exc).__name__}: {exc}")
+        raise DriveInboxError(
+            f"Could not reach Drive ({method} {path}): {type(exc).__name__}"
+        ) from exc
     if not response.ok:
         try:
             detail = response.json().get("error", {}).get("message", "")

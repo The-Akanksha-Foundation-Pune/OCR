@@ -45,7 +45,8 @@ def load_stashed(scan_id: str) -> tuple[bytes, str] | None:
 def page_image_jpeg(scan_id: str, page_number: int = 1) -> tuple[bytes, str] | None:
     """Return JPEG bytes for one page of a stashed scan (1-based page index).
 
-    Images become a single JPEG; PDFs render the requested page.
+    Images become a single JPEG; PDFs and TIFFs render the requested page,
+    so a TIFF page reaches Drive as a JPEG like every other scan.
     """
     loaded = load_stashed(scan_id)
     if loaded is None:

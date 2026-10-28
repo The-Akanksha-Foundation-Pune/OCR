@@ -1,0 +1,8 @@
+# Development and test tools only - never needed on the server.
+#   pip install -r requirements.txt -r requirements-dev.txt
+#   python -m pytest
+-r requirements.txt
+pytest>=8.3,<9
+pytest-cov>=6,<8
+ruff>=0.8,<1
+mypy>=1.13,<2

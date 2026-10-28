@@ -79,11 +79,14 @@
 
       <div id="review-bar" class="review-bar" hidden>
         <span class="review-bar-text">
-          <span id="review-count">0</span> row(s) need checking against the paper
+          <span id="review-count">0</span> row(s) in this list need checking against the paper
         </span>
         <button type="button" id="review-all-btn" class="review-all-btn">
           Mark all checked
         </button>
+        <span id="review-all-hint" class="action-hint" hidden>
+          Choose a school or city to mark them all at once
+        </span>
       </div>
 
       <div class="tabs" role="tablist">
@@ -287,6 +290,10 @@
     let page = 1;
     let total = 0;
     let searchTimer = null;
+    // Numbers each list request. Typing carries on while a search is in
+    // flight, and a broad term ("MOH") can be answered after the full ID
+    // typed since - only the newest request's answer may reach the table.
+    let loadSeq = 0;
 
     function escapeHtml(value) {
       return String(value ?? "").replace(/[&<>"']/g, (c) => (
@@ -367,6 +374,7 @@
     async function loadTab() {
       tableStatus.hidden = true;
       showLoader("Loading scan history…");
+      const seq = ++loadSeq;
 
       const params = new URLSearchParams({
         page: String(page),
@@ -380,21 +388,31 @@
       // falls back to the whole city when it is left on "All".
       const location = histSelectedLocation();
       if (location) params.set("location", location);
+      // The filter this answer will be for, kept with it: the search box
+      // may already hold something newer by the time it arrives.
+      const filter = { search, school, location };
 
       try {
         const response = await fetch(`${apiForTab(activeTab)}?${params.toString()}`);
         const data = await response.json();
+        // A newer request has gone out since (more typing, another filter
+        // or tab); its answer is the one that matches the screen.
+        if (seq !== loadSeq) return;
         if (!response.ok) throw new Error(data.error || "Failed to load.");
 
         total = data.total || 0;
         renderRows(data.items || []);
+        refreshReviewBar(data.needs_review, filter, data.review_token);
         updateCount();
         updatePagination();
         tableStatus.hidden = true;
       } catch (error) {
+        if (seq !== loadSeq) return;
         tableStatus.className = "status error";
         tableStatus.textContent = error.message;
         (activeTab === "scanned" ? scannedBody : notFoundBody).innerHTML = "";
+        // No list on screen, so nothing for "Mark all checked" to cover.
+        refreshReviewBar(0, null);
       } finally {
         hideLoader();
       }
@@ -459,7 +477,6 @@
           )
           .join("");
         scannedEmpty.hidden = items.length !== 0;
-        refreshReviewBar(items);
       } else {
         notFoundBody.innerHTML = items
           .map(
@@ -502,29 +519,68 @@
     const reviewBar = document.getElementById("review-bar");
     const reviewCount = document.getElementById("review-count");
     const reviewAllBtn = document.getElementById("review-all-btn");
+    const reviewAllHint = document.getElementById("review-all-hint");
 
-    function refreshReviewBar(items) {
-      if (activeTab !== "scanned") {
+    // What "Mark all checked" would sign off: the filter of the list on
+    // screen, the server's count of its rows needing a check and its token
+    // for exactly those rows. Null when the button is not on offer.
+    let reviewScope = null;
+
+    // The count comes from the server and covers every page of the
+    // filtered list, not the 25 rows on this one, so the number in the bar
+    // is the number the button marks.
+    function refreshReviewBar(count, filter, token) {
+      const pending = Number(count) || 0;
+      if (activeTab !== "scanned" || !filter || pending <= 0) {
+        reviewScope = null;
         reviewBar.hidden = true;
         return;
       }
-      const pending = (items || []).filter(
-        (row) => row.matched_via &&
-          !["exact", "shape_fix"].includes((row.matched_via || "").toLowerCase()) &&
-          !row.reviewed_at
-      ).length;
+      // Across every school the list runs to pages nobody opens, so the
+      // server only signs off one school's or one city's list at a time.
+      // The count still shows; each row keeps its own Mark checked button.
+      const narrowed = Boolean(filter.school || filter.location);
+      reviewScope = narrowed && token ? { ...filter, expected: pending, token } : null;
       reviewCount.textContent = pending;
-      reviewBar.hidden = pending === 0;
+      reviewAllBtn.hidden = !reviewScope;
+      reviewAllHint.hidden = narrowed;
+      reviewBar.hidden = false;
+    }
+
+    function describeReviewScope(scope) {
+      const where = scope.school || `all ${scope.location} schools`;
+      return scope.search ? `${where}, matching "${scope.search}"` : where;
     }
 
     async function markChecked(studentIds, all) {
-      const body = all
-        ? {
-            all: true,
-            school: histSchool ? histSchool.value : "",
-            location: histSelectedLocation(),
-          }
-        : { student_ids: studentIds };
+      let body;
+      if (all) {
+        const scope = reviewScope;
+        if (!scope) return;
+        const n = scope.expected;
+        // Rows on other pages are covered too, so say how many and where
+        // before signing anything off in this person's name.
+        const ok = window.confirm(
+          `Mark ${n} row${n === 1 ? "" : "s"} as checked against the paper?\n\n` +
+          `That is every "Recheck needed" row in this list ` +
+          `(${describeReviewScope(scope)}), on every page - not only the ones on screen.`
+        );
+        if (!ok) return;
+        // The filter the list was loaded with, not whatever the boxes hold
+        // now, plus the confirmed count and the token for those very rows:
+        // the server refuses if any row has come or gone since, even at
+        // the same count, rather than signing off rows nobody was shown.
+        body = {
+          all: true,
+          school: scope.school,
+          location: scope.location,
+          search: scope.search,
+          expected: n,
+          token: scope.token,
+        };
+      } else {
+        body = { student_ids: studentIds };
+      }
 
       showLoader(all ? "Marking all checked\u2026" : "Marking checked\u2026");
       try {
@@ -534,7 +590,12 @@
           body: JSON.stringify(body),
         });
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "Could not mark as checked.");
+        if (!response.ok) {
+          // 409: more rows came in since the count was shown. Reload so the
+          // bar shows the new number before anyone confirms again.
+          if (response.status === 409) await loadTab();
+          throw new Error(data.error || "Could not mark as checked.");
+        }
         // Reload rather than patching the DOM: the reviewed_at value comes
         // from the server, and guessing it here would drift from the truth.
         await loadTab();
@@ -687,7 +748,13 @@
       openDeleteModal(deleteBtn.dataset.id, row);
     });
 
+    // Tabs whose count a list load has written. The page-load preload of
+    // both counts is unfiltered and can answer after a search has already
+    // set one, so it only fills in a count no list has written yet.
+    const countedByList = new Set();
+
     function updateCount() {
+      countedByList.add(activeTab);
       if (activeTab === "scanned") {
         scannedCount.textContent = total;
       } else {
@@ -749,14 +816,19 @@
 
     (async function preloadCounts() {
       try {
+        // review=0: only the total is wanted, not the review count.
         const [scannedRes, notFoundRes] = await Promise.all([
-          fetch(API_BASE + "/api/scanned?page=1&page_size=1"),
+          fetch(API_BASE + "/api/scanned?page=1&page_size=1&review=0"),
           fetch(API_BASE + "/api/not-found?page=1&page_size=1"),
         ]);
         const scannedData = await scannedRes.json();
         const notFoundData = await notFoundRes.json();
-        scannedCount.textContent = scannedData.total ?? "—";
-        notFoundCount.textContent = notFoundData.total ?? "—";
+        if (!countedByList.has("scanned")) {
+          scannedCount.textContent = scannedData.total ?? "—";
+        }
+        if (!countedByList.has("not-found")) {
+          notFoundCount.textContent = notFoundData.total ?? "—";
+        }
       } catch (_error) {
         // Non-fatal — the active tab's own load will refresh this anyway.
       }
