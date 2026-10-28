@@ -39,13 +39,13 @@
       <p class="brand">Akanksha Form OCR</p>
       <h1>Extract Student ID</h1>
       <p class="lede">
-        Pick the location and school, then press the Scan button on the
-        scanner - this page sends each page from your <strong>scan
-        folder</strong> as the scanner saves it, or you can add scanned files
-        by hand. The pages are read in the background and gathered into
-        documents by the batch code in their top-right corner; check each
-        one under <strong>OCR results</strong> and press Confirm and upload.
-        Nothing is saved until you do.</p>
+        Pick the location and school. When the scanner on this computer is
+        connected, press <strong>Scan now</strong>. You can also send pages
+        from a scan folder, or add scanned files by hand. The pages are read
+        in the background and gathered into documents by the batch code in
+        their top-right corner; check each one under <strong>OCR
+        results</strong> and press Confirm and upload. Nothing is saved
+        until you do.</p>
     </header>
 
     <section class="panel" aria-label="Upload scan">
@@ -80,16 +80,61 @@
           </p>
         </div>
 
-        <!-- The scanner. Staff start each scan at the scanner - its Scan
-             button, or its own software - and that software saves every
-             page into a folder. A browser cannot drive a scanner, but Chrome
-             and Edge let a page keep reading a folder the person picks, so
-             this page watches it and reads each new scan; nothing of ours is
-             installed. Other browsers take the scans through Add scanned
-             files below. Filled in by the script. -->
-        <section class="scanner" id="scan-folder-card" aria-labelledby="scan-folder-title">
+        <!-- The scanner plugged into this computer. The page cannot drive it
+             itself; the scan helper on 127.0.0.1 answers which scanners are
+             connected and hands each page back. Filled in by the script. -->
+        <section class="scanner" id="scanner-card" aria-labelledby="scanner-title">
           <div class="scanner-head">
-            <span class="school-label" id="scan-folder-title">Scanner</span>
+            <span class="school-label" id="scanner-title">Scanner</span>
+            <button type="button" class="scanner-pill" id="scanner-recheck">Check again</button>
+          </div>
+          <p class="scanner-state is-checking" id="scanner-state" aria-live="polite">
+            Looking for the scanner on this computer…
+          </p>
+          <ul class="scanner-devices" id="scanner-devices" role="radiogroup"
+              aria-labelledby="scanner-title" hidden></ul>
+          <p class="scanner-note" id="scanner-empty" hidden>
+            No scanner is connected. Plug it in and switch it on, then press
+            Check again.
+          </p>
+          <p class="scanner-note" id="scanner-errors" hidden></p>
+          <div class="scanner-settings" id="scanner-settings" hidden>
+            <label class="scanner-field">
+              <span class="school-label">Source</span>
+              <select id="scanner-source" class="school-select scanner-select">
+                <option value="feeder" selected>Feeder, one side</option>
+                <option value="duplex">Feeder, both sides</option>
+                <option value="flatbed">Flatbed</option>
+              </select>
+            </label>
+            <label class="scanner-field">
+              <span class="school-label">Resolution</span>
+              <select id="scanner-dpi" class="school-select scanner-select">
+                <option value="200">200 dpi</option>
+                <option value="300" selected>300 dpi</option>
+                <option value="400">400 dpi</option>
+                <option value="600">600 dpi</option>
+              </select>
+            </label>
+            <label class="scanner-field">
+              <span class="school-label">Colour</span>
+              <select id="scanner-color" class="school-select scanner-select">
+                <option value="gray" selected>Greyscale</option>
+                <option value="color">Colour</option>
+              </select>
+            </label>
+          </div>
+          <p class="scanner-message" id="scanner-message" role="alert" hidden></p>
+          <button type="button" class="scanner-primary" id="scanner-go" disabled hidden>Scan now</button>
+        </section>
+
+        <!-- A browser cannot drive a scanner, but Chrome and Edge can keep
+             reading a folder the scanner's own software saves into. Other
+             browsers take those files through Add scanned files. Shown when
+             the helper above has no scanner connected. -->
+        <section class="scanner" id="scan-folder-card" aria-labelledby="scan-folder-title" hidden>
+          <div class="scanner-head">
+            <span class="school-label" id="scan-folder-title">Scan folder</span>
             <span class="scanner-head-actions">
               <button type="button" class="scanner-pill" id="scan-folder-toggle" hidden>Stop watching</button>
               <button type="button" class="scanner-pill" id="scan-folder-change" hidden>Change folder</button>
@@ -3681,6 +3726,436 @@ async function requestStop(force) {
     // before then, the progress line would show the count for the page's
     // default, all Pune schools, under someone else's school.
     schoolsLoaded.then(loadInboxStatus);
+
+    // The scanner on this computer. The helper (tools/scan_agent.py) listens
+    // on 127.0.0.1 only, so this page — local or the live site, opened on
+    // that computer — can ask it which scanner is plugged in and take each
+    // page it scans. Those pages join the same queue as a file added by hand.
+    const SCAN_AGENT = "http://127.0.0.1:8765";
+    const SCAN_AGENT_MIN_VERSION = 2;
+    const SCANNER_DEVICE_KEY = "ocr.scanner.device";
+    const SCANNER_SOURCE_KEY = "ocr.scanner.source";
+    const SCANNER_DPI_KEY = "ocr.scanner.dpi";
+    const SCANNER_COLOR_KEY = "ocr.scanner.color";
+    const DRIVER_LABELS = {
+      wia: "WIA driver",
+      twain: "TWAIN driver",
+      apple: "Mac driver",
+      sane: "SANE driver",
+      escl: "AirScan",
+    };
+    const CONNECTION_LABELS = { usb: "USB", network: "Network" };
+
+    const scannerRecheck = document.getElementById("scanner-recheck");
+    const scannerState = document.getElementById("scanner-state");
+    const scannerDevices = document.getElementById("scanner-devices");
+    const scannerEmpty = document.getElementById("scanner-empty");
+    const scannerErrors = document.getElementById("scanner-errors");
+    const scannerSettings = document.getElementById("scanner-settings");
+    const scannerSource = document.getElementById("scanner-source");
+    const scannerDpi = document.getElementById("scanner-dpi");
+    const scannerColor = document.getElementById("scanner-color");
+    const scannerMessage = document.getElementById("scanner-message");
+    const scannerGo = document.getElementById("scanner-go");
+    const scanFolderCard = document.getElementById("scan-folder-card");
+
+    let scannerPhase = "checking";
+    let scannerReady = [];
+    let scannerSelectedId = recall(SCANNER_DEVICE_KEY);
+    let scannerChecking = false;
+    let scannerCheckGeneration = 0;
+    let scannerScanning = false;
+    let scanStopRequested = false;
+    let scannerWatchTimer = null;
+
+    const savedSource = recall(SCANNER_SOURCE_KEY);
+    const savedDpi = recall(SCANNER_DPI_KEY);
+    const savedColor = recall(SCANNER_COLOR_KEY);
+    if (savedSource) scannerSource.value = savedSource;
+    if (savedDpi) scannerDpi.value = savedDpi;
+    if (savedColor) scannerColor.value = savedColor;
+
+    function scannerPause(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function timeoutSignal(ms) {
+      if (window.AbortSignal && typeof AbortSignal.timeout === "function") {
+        return AbortSignal.timeout(ms);
+      }
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), ms);
+      return controller.signal;
+    }
+
+    function setScannerState(text, tone) {
+      const className = "scanner-state" + (tone ? " is-" + tone : "");
+      if (scannerState.textContent === text && scannerState.className === className) return;
+      scannerState.textContent = text;
+      scannerState.className = className;
+    }
+
+    function showScannerMessage(text) {
+      scannerMessage.textContent = text;
+      scannerMessage.hidden = !text;
+    }
+
+    function showScanFolder(show) {
+      scanFolderCard.hidden = !show;
+    }
+
+    function selectedScannerDevice() {
+      return scannerReady.find((device) => device.id === scannerSelectedId) || null;
+    }
+
+    function scannerRow(nameText, subText, chipText, chipTone) {
+      const li = document.createElement("li");
+      li.className = "scanner-device";
+      const label = document.createElement("label");
+      label.className = "scanner-device-main";
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "scanner-device";
+      const text = document.createElement("span");
+      text.className = "scanner-device-text";
+      const name = document.createElement("span");
+      name.className = "scanner-device-name";
+      name.textContent = nameText;
+      const sub = document.createElement("span");
+      sub.className = "scanner-device-sub";
+      sub.textContent = subText;
+      text.append(name, sub);
+      const chip = document.createElement("span");
+      chip.className = "scanner-chip is-" + chipTone;
+      chip.textContent = chipText;
+      label.append(radio, text, chip);
+      li.appendChild(label);
+      return { li, radio };
+    }
+
+    function paintScannerControls() {
+      const busy = scannerChecking || scannerScanning;
+      scannerRecheck.disabled = busy && !scannerScanning;
+      scannerRecheck.textContent = scannerChecking && !scannerScanning ? "Checking…" : "Check again";
+      const device = selectedScannerDevice();
+      const ready = scannerPhase === "ready" && scannerReady.length > 0;
+      scannerSettings.hidden = !ready;
+      scannerGo.hidden = !ready;
+      if (scannerScanning) {
+        scannerGo.textContent = scanStopRequested ? "Stopping…" : "Stop scanning";
+        scannerGo.disabled = scanStopRequested;
+      } else {
+        scannerGo.textContent = "Scan now";
+        scannerGo.disabled = !device || busy;
+      }
+    }
+
+    function paintConnected() {
+      const device = selectedScannerDevice();
+      if (device) {
+        setScannerState(device.name + " is connected", "ok");
+      } else if (scannerReady.length > 1) {
+        setScannerState(scannerReady.length + " scanners are connected. Choose one.", "ok");
+      } else {
+        setScannerState("No scanner is connected. Plug it in and press Check again.", "warn");
+      }
+      // The folder card is the fallback for a computer whose helper has no
+      // scanner. A connected scanner is the way this page scans.
+      showScanFolder(scannerReady.length === 0);
+    }
+
+    function showScannerMissing() {
+      scannerPhase = "missing";
+      scannerReady = [];
+      scannerDevices.innerHTML = "";
+      scannerDevices.hidden = true;
+      scannerEmpty.hidden = true;
+      scannerErrors.hidden = true;
+      setScannerState(
+        "The scan helper is not running on this computer. Start it, then press Check again.",
+        "warn"
+      );
+      showScanFolder(true);
+    }
+
+    function showScannerReport(report) {
+      scannerPhase = "ready";
+      const devices = Array.isArray(report.devices) ? report.devices : [];
+      scannerReady = devices.filter(
+        (device) => device && device.id && (device.status || "ready") === "ready"
+      );
+      const unready = Array.isArray(report.unready) ? report.unready : [];
+      scannerDevices.innerHTML = "";
+      scannerReady.forEach((device) => {
+        const sub = [CONNECTION_LABELS[device.connection], DRIVER_LABELS[device.driver] || device.driver]
+          .filter(Boolean)
+          .join(" · ");
+        const row = scannerRow(device.name || device.id, sub, "Ready", "ready");
+        row.li.classList.add("is-ready");
+        row.radio.value = device.id;
+        row.radio.checked = device.id === scannerSelectedId;
+        scannerDevices.appendChild(row.li);
+      });
+      unready.forEach((entry) => {
+        if (!entry) return;
+        const sub = [CONNECTION_LABELS[entry.connection] || "USB", entry.vendor].filter(Boolean).join(" · ");
+        const row = scannerRow(entry.name || "Unknown scanner", sub, "Driver not installed", "warn");
+        row.li.classList.add("is-unready");
+        row.radio.disabled = true;
+        scannerDevices.appendChild(row.li);
+      });
+      scannerDevices.hidden = scannerDevices.children.length === 0;
+      scannerEmpty.hidden = scannerReady.length > 0 || unready.length > 0;
+      const errors = (Array.isArray(report.errors) ? report.errors : []).filter(Boolean);
+      scannerErrors.textContent = errors.join(" ");
+      scannerErrors.hidden = errors.length === 0;
+
+      const keep = scannerSelectedId;
+      const pick =
+        scannerReady.find((device) => device.id === keep) ||
+        (scannerReady.length === 1 ? scannerReady[0] : null) ||
+        scannerReady.find((device) => /sp-?1130n/i.test(device.name || ""));
+      if (pick) {
+        scannerSelectedId = pick.id;
+        remember(SCANNER_DEVICE_KEY, pick.id);
+        scannerDevices.querySelectorAll("input").forEach((input) => {
+          if (input.name === "scanner-device") input.checked = input.value === pick.id;
+        });
+      }
+      paintConnected();
+    }
+
+    function scheduleScannerWatch() {
+      if (scannerWatchTimer) clearTimeout(scannerWatchTimer);
+      scannerWatchTimer = setTimeout(() => {
+        scannerWatchTimer = null;
+        if (!scannerScanning && !scannerChecking) checkScanner({ watch: true, quiet: true });
+      }, 4000);
+    }
+
+    async function readAgentJson(url, ms) {
+      const response = await fetch(url, { cache: "no-store", signal: timeoutSignal(ms) });
+      const data = await response.json().catch(() => null);
+      return { ok: response.ok, status: response.status, data: data && typeof data === "object" ? data : {} };
+    }
+
+    async function checkScanner(options) {
+      const refresh = Boolean(options && options.refresh);
+      const quiet = Boolean(options && options.quiet);
+      const watch = Boolean(options && options.watch);
+      if (scannerScanning) return;
+      const generation = ++scannerCheckGeneration;
+      scannerChecking = true;
+      if (!quiet) {
+        showScannerMessage("");
+        setScannerState("Looking for the scanner on this computer…", "checking");
+      }
+      paintScannerControls();
+      try {
+        let health = null;
+        try {
+          const reply = await readAgentJson(SCAN_AGENT + "/health", 30000);
+          health = reply.ok ? reply.data : null;
+        } catch (_) {
+          health = null;
+        }
+        if (generation !== scannerCheckGeneration) return;
+        if (!health || health.agent !== "akanksha-scan-agent") {
+          if (!quiet) showScannerMissing();
+          return;
+        }
+        if (!(Number(health.version) >= SCAN_AGENT_MIN_VERSION)) {
+          scannerPhase = "missing";
+          setScannerState("Close the scan helper and start it again, then press Check again.", "warn");
+          showScanFolder(true);
+          return;
+        }
+        if (!quiet) setScannerState("Scan helper is running. Checking the scanner…", "checking");
+        let report = null;
+        let failure = "";
+        try {
+          const path = refresh ? "/devices?refresh=1" : watch ? "/devices?watch=1" : "/devices?watch=1";
+          let reply = await readAgentJson(SCAN_AGENT + path, 90000);
+          if (
+            !refresh &&
+            reply.ok &&
+            reply.data.unknown &&
+            !(Array.isArray(reply.data.devices) && reply.data.devices.length)
+          ) {
+            reply = await readAgentJson(SCAN_AGENT + "/devices", 90000);
+          }
+          report = reply.data;
+          if (!reply.ok) failure = report.error || "The scan helper could not list scanners.";
+        } catch (_) {
+          failure = "The scan helper stopped answering.";
+        }
+        if (generation !== scannerCheckGeneration) return;
+        if (failure || !report) {
+          if (!quiet) {
+            setScannerState("The scan helper is running, but the scanner list did not come back.", "warn");
+            showScannerMessage(failure);
+            showScanFolder(true);
+          }
+          return;
+        }
+        showScannerReport(report);
+      } finally {
+        if (generation === scannerCheckGeneration) {
+          scannerChecking = false;
+          paintScannerControls();
+          scheduleScannerWatch();
+        }
+      }
+    }
+
+    function jpegFile(base64, name) {
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+      if (typeof File === "function") return new File([bytes], name, { type: "image/jpeg" });
+      const blob = new Blob([bytes], { type: "image/jpeg" });
+      blob.name = name;
+      return blob;
+    }
+
+    async function scanWithHelper() {
+      const device = selectedScannerDevice();
+      if (!device || scannerScanning || scannerChecking) return;
+      const settings = {
+        source: scannerSource.value || "feeder",
+        dpi: Number(scannerDpi.value) || 300,
+        color: scannerColor.value || "gray",
+      };
+      remember(SCANNER_SOURCE_KEY, settings.source);
+      remember(SCANNER_DPI_KEY, String(settings.dpi));
+      remember(SCANNER_COLOR_KEY, settings.color);
+      showScannerMessage("");
+      scannerScanning = true;
+      scanStopRequested = false;
+      paintScannerControls();
+      setScannerState("Starting " + (device.name || "the scanner") + "…", "checking");
+
+      let jobId = "";
+      let read = 0;
+      let failure = "";
+      try {
+        const response = await fetch(SCAN_AGENT + "/scan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            device_id: device.id,
+            source: settings.source,
+            dpi: settings.dpi,
+            color: settings.color,
+          }),
+          signal: timeoutSignal(60000),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error((data && data.error) || "The scanner did not start.");
+        jobId = data && data.job ? String(data.job) : "";
+        if (!jobId) throw new Error("The scan helper did not start a scan.");
+
+        let done = false;
+        let lastContact = Date.now();
+        while (!done) {
+          if (scanStopRequested) throw new Error("Scan stopped.");
+          let batch = null;
+          try {
+            const pageResponse = await fetch(
+              SCAN_AGENT + "/pages?job=" + encodeURIComponent(jobId) + "&after=" + read,
+              { cache: "no-store", signal: timeoutSignal(30000) }
+            );
+            batch = await pageResponse.json().catch(() => null);
+            if (!pageResponse.ok) {
+              throw new Error((batch && batch.error) || "Lost track of the scan.");
+            }
+          } catch (error) {
+            const missed = !batch;
+            if (!missed) throw error;
+            batch = null;
+          }
+          if (!batch) {
+            if (Date.now() - lastContact > 20000) {
+              throw new Error("Lost contact with the scan helper. Press Check again.");
+            }
+            setScannerState("Waiting for the scan helper…", "checking");
+            await scannerPause(1500);
+            continue;
+          }
+          const finished = Boolean(batch.finished);
+          const pages = (Array.isArray(batch.pages) ? batch.pages : [])
+            .map((page) => ({ number: Number(page.page), base64: page.jpeg_base64 }))
+            .filter((page) => Number.isInteger(page.number) && page.number > read && page.base64)
+            .sort((a, b) => a.number - b.number);
+          if (pages.length) {
+            queueScans(
+              pages.map((captured) => ({
+                file: jpegFile(
+                  captured.base64,
+                  "scan-" + String(captured.number).padStart(3, "0") + ".jpg"
+                ),
+                scope: pickerScope(),
+              }))
+            );
+            read = pages[pages.length - 1].number;
+            setScannerState(
+              "Read " + read + " page" + (read === 1 ? "" : "s") + " from " + (device.name || "the scanner"),
+              "checking"
+            );
+          }
+          lastContact = Date.now();
+          if (scanStopRequested) throw new Error("Scan stopped.");
+          if (finished) {
+            if (batch.error) failure = String(batch.error);
+            done = pages.length === 0;
+          } else if (read === 0) {
+            setScannerState("Feeding the stack on " + (device.name || "the scanner") + "…", "checking");
+            await scannerPause(800);
+          } else {
+            await scannerPause(800);
+          }
+        }
+        if (!failure && read === 0) {
+          failure = "The scanner returned no pages. Check the forms are loaded, then scan again.";
+        }
+      } catch (error) {
+        failure = error && error.message ? error.message : "The scan stopped.";
+      } finally {
+        if (jobId) {
+          fetch(SCAN_AGENT + "/finish?job=" + encodeURIComponent(jobId), { method: "POST" }).catch(() => {});
+        }
+        scannerScanning = false;
+        scanStopRequested = false;
+        paintConnected();
+        paintScannerControls();
+        if (failure) showScannerMessage(failure);
+        scheduleScannerWatch();
+      }
+    }
+
+    scannerRecheck.addEventListener("click", () => checkScanner({ refresh: true }));
+    scannerGo.addEventListener("click", () => {
+      if (scannerScanning) {
+        scanStopRequested = true;
+        paintScannerControls();
+        return;
+      }
+      scanWithHelper();
+    });
+    scannerDevices.addEventListener("change", (event) => {
+      const input = event.target;
+      if (!input || input.name !== "scanner-device") return;
+      scannerSelectedId = input.value;
+      remember(SCANNER_DEVICE_KEY, input.value);
+      paintConnected();
+      paintScannerControls();
+    });
+    [scannerSource, scannerDpi, scannerColor].forEach((select) => {
+      select.addEventListener("change", () => {
+        remember(SCANNER_SOURCE_KEY, scannerSource.value);
+        remember(SCANNER_DPI_KEY, scannerDpi.value);
+        remember(SCANNER_COLOR_KEY, scannerColor.value);
+      });
+    });
+    checkScanner();
 
     setUpScanning();
     // What is already waiting from before - another visit, or another
