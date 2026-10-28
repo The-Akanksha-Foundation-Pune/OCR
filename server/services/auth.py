@@ -6,10 +6,24 @@ from typing import Any
 
 from flask import jsonify, redirect, request, session, url_for
 
+from server.config import LOCAL_OPEN_ACCESS
+
+# Shown in the sidebar when Google sign-in is skipped for local development.
+_LOCAL_USER = {
+    "email": "local@localhost",
+    "name": "Local",
+    "picture": "",
+}
+
 
 def current_user() -> dict[str, Any] | None:
     """The signed-in user's {email, name, picture}, or None if not signed in."""
-    return session.get("user")
+    user = session.get("user")
+    if user is not None:
+        return user
+    if LOCAL_OPEN_ACCESS:
+        return _LOCAL_USER
+    return None
 
 
 def require_login():

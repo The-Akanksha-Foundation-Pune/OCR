@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import cv2
 import fitz
 import numpy as np
 from PIL import Image
+
+# Windows WIA often saves a BMP even when the file is named .jpg, and some
+# drivers write grayscale or 4-channel bitmaps. The rest of the pipeline
+# assumes a 3-channel BGR image.
+_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 
 
 def load_image_from_path(file_path: str | Path) -> np.ndarray:
@@ -18,11 +24,8 @@ def load_image_from_path(file_path: str | Path) -> np.ndarray:
     if suffix == ".pdf":
         return _pdf_first_page_to_bgr(path)
 
-    if suffix in {".jpg", ".jpeg", ".png"}:
-        image = cv2.imread(str(path))
-        if image is None:
-            raise ValueError(f"Could not read image: {path.name}")
-        return image
+    if suffix in _IMAGE_SUFFIXES:
+        return _decode_image_bytes(path.read_bytes(), path.name)
 
     raise ValueError(f"Unsupported file type: {suffix}")
 
@@ -34,12 +37,8 @@ def load_image_from_bytes(data: bytes, filename: str) -> np.ndarray:
     if suffix == ".pdf":
         return _pdf_bytes_to_bgr(data)
 
-    if suffix in {".jpg", ".jpeg", ".png"}:
-        array = np.frombuffer(data, dtype=np.uint8)
-        image = cv2.imdecode(array, cv2.IMREAD_COLOR)
-        if image is None:
-            raise ValueError(f"Could not decode image: {filename}")
-        return image
+    if suffix in _IMAGE_SUFFIXES:
+        return _decode_image_bytes(data, filename)
 
     raise ValueError(f"Unsupported file type: {suffix}")
 
@@ -54,6 +53,42 @@ def load_pages_from_bytes(data: bytes, filename: str) -> list[np.ndarray]:
         return _pdf_bytes_to_bgr_pages(data)
 
     return [load_image_from_bytes(data, filename)]
+
+
+def ensure_bgr(image: np.ndarray) -> np.ndarray:
+    """Turn grayscale, BGRA, or BGR into a 3-channel BGR image."""
+    if image is None or image.size == 0:
+        return image
+    if image.ndim == 2:
+        return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    channels = image.shape[2]
+    if channels == 4:
+        return cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+    if channels == 1:
+        return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    return image
+
+
+def _decode_image_bytes(data: bytes, filename: str) -> np.ndarray:
+    """Decode a scan. The suffix is only a hint.
+
+    A Windows scanner names the file .jpg and then writes a BMP, which
+    OpenCV still recognises from the file header. If that fails, Pillow
+    reads the formats OpenCV refuses (some 16-bit and palette BMPs).
+    """
+    array = np.frombuffer(data, dtype=np.uint8)
+    image = cv2.imdecode(array, cv2.IMREAD_UNCHANGED)
+    if image is None:
+        try:
+            with Image.open(io.BytesIO(data)) as pil_image:
+                rgb = np.asarray(pil_image.convert("RGB"))
+        except Exception as exc:
+            raise ValueError(f"Could not decode image: {filename}") from exc
+        image = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    image = ensure_bgr(image)
+    if image is None or image.size == 0:
+        raise ValueError(f"Could not decode image: {filename}")
+    return image
 
 
 def count_pages_from_bytes(data: bytes, filename: str) -> int:
@@ -88,12 +123,36 @@ def load_page_from_bytes(data: bytes, filename: str, page_number: int) -> np.nda
         return _render_page(document[index], 200)
 
 
+def limit_working_size(image_bgr: np.ndarray, max_long_side: int) -> np.ndarray:
+    """Shrink a scan so its long side is at most `max_long_side` pixels.
+
+    INTER_AREA is the right filter when reducing: it averages pixels instead
+    of picking one, so a 600 DPI scanner JPEG becomes the same kind of page
+    a 200 DPI PDF render already is.
+    """
+    if image_bgr is None or image_bgr.size == 0 or max_long_side <= 0:
+        return image_bgr
+    height, width = image_bgr.shape[:2]
+    long_side = max(height, width)
+    if long_side <= max_long_side:
+        return image_bgr
+    scale = max_long_side / float(long_side)
+    return cv2.resize(
+        image_bgr,
+        (max(1, int(round(width * scale))), max(1, int(round(height * scale)))),
+        interpolation=cv2.INTER_AREA,
+    )
+
+
 def preprocess_for_ocr(image_bgr: np.ndarray) -> np.ndarray:
     """Deskew and enhance a scan for more reliable label detection."""
     if image_bgr is None or image_bgr.size == 0:
         raise ValueError("Empty image")
 
-    deskewed = _deskew(image_bgr)
+    from server.config import MAX_OCR_LONG_SIDE
+
+    sized = limit_working_size(ensure_bgr(image_bgr), MAX_OCR_LONG_SIDE)
+    deskewed = _deskew(sized)
     enhanced = _enhance_contrast(deskewed)
     return enhanced
 

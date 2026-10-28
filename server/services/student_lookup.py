@@ -182,7 +182,7 @@ def find_student_by_id(
                     f"""
                     UPDATE {STUDENT_TABLE}
                     SET scanned_at = %s
-                    WHERE UPPER(TRIM(student_id)) = UPPER(%s)
+                    WHERE student_id = %s
                     """,
                     (now_ist(), matched_id),
                 )
@@ -192,7 +192,7 @@ def find_student_by_id(
                     f"""
                     SELECT scanned_at
                     FROM {STUDENT_TABLE}
-                    WHERE UPPER(TRIM(student_id)) = UPPER(%s)
+                    WHERE student_id = %s
                     LIMIT 1
                     """,
                     (matched_id,),
@@ -331,8 +331,10 @@ def _exact_lookup(
         slots = ", ".join(["%s"] * len(scope))
         school_clause = f" AND UPPER(TRIM(school_name)) IN ({slots})"
         params.extend(name.upper() for name in scope)
-    cur.execute(
-        f"""
+    # student_id is indexed. Comparing the column directly lets MySQL use
+    # that index. UPPER(TRIM(student_id)) cannot. The collation is
+    # case-insensitive, so a lowercase stored ID still matches.
+    select = f"""
         SELECT
             student_id,
             student_name,
@@ -344,9 +346,19 @@ def _exact_lookup(
             status,
             scanned_at
         FROM {STUDENT_TABLE}
-        WHERE UPPER(TRIM(student_id)) = UPPER(%s){school_clause}
-        LIMIT 1
-        """,
+    """
+    cur.execute(
+        select + f"WHERE student_id = %s{school_clause} LIMIT 1",
+        tuple(params),
+    )
+    row = cur.fetchone()
+    if row is not None:
+        return row
+    # Two stored IDs have a leading space (' MOSHA101020', ' AVKAR170819').
+    # The index does not see those as the trimmed value, so this second
+    # pass runs only when the indexed lookup misses.
+    cur.execute(
+        select + f"WHERE UPPER(TRIM(student_id)) = UPPER(%s){school_clause} LIMIT 1",
         tuple(params),
     )
     return cur.fetchone()

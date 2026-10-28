@@ -1117,6 +1117,11 @@ def check_devices(platform: str | None = None) -> dict:
         )
         unready = []
 
+    global _watch_usb_names
+    _watch_usb_names = sorted(
+        {(item.get("name") or "").strip() for item in usb if item.get("name")}
+    )
+
     return {
         "checked_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "platform": platform or sys.platform,
@@ -1156,6 +1161,205 @@ def get_devices(refresh: bool = False, max_age: float = CACHE_SECONDS) -> dict:
 def cached_devices() -> dict | None:
     """The last answer, however old, without checking again."""
     return _devices_cache["result"]
+
+
+def _remember(result: dict) -> dict:
+    """Keep a full listing so the next watch does not bring a stale one back."""
+    with _devices_lock:
+        _devices_cache["result"] = result
+        _devices_cache["at"] = time.monotonic()
+    return result
+
+
+# Names seen on the USB bus at the last successful watch. A change while no
+# USB scanner is ready is the signal to list drivers again. A failed read
+# leaves this alone, so a glitch is not treated as an unplugged scanner.
+_watch_usb_names: list[str] | None = None
+_SERVICE_MARKERS = ("_uscan._tcp.", "_ipp._tcp.", "_uscan._tcp", "_ipp._tcp")
+
+
+def _instance_name(line: str) -> str | None:
+    """The Bonjour instance on one dns-sd browse line, if it announces a device."""
+    if " Add " not in f" {line} ":
+        return None
+    for marker in _SERVICE_MARKERS:
+        at = line.find(marker)
+        if at != -1:
+            name = line[at + len(marker) :].strip()
+            return name or None
+    return None
+
+
+def _dns_sd_browse(service: str, seconds: float) -> list[str] | None:
+    """Names advertised for one Bonjour service, or None if the browse failed.
+
+    dns-sd does not exit on its own. It is stopped after `seconds`. A browse
+    that never prints its header is a failure, not an empty network.
+    """
+    try:
+        proc = subprocess.Popen(
+            ["dns-sd", "-B", service, "local."],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except OSError:
+        return None
+    lines: list[str] = []
+
+    def _read() -> None:
+        if proc.stdout is None:
+            return
+        for line in proc.stdout:
+            lines.append(line)
+
+    reader = threading.Thread(target=_read, daemon=True)
+    reader.start()
+    try:
+        time.sleep(seconds)
+    finally:
+        proc.kill()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+    reader.join(timeout=1)
+    if not any("STARTING" in line for line in lines):
+        return None
+    return [name for name in (_instance_name(line) for line in lines) if name]
+
+
+def browse_network_scanners(seconds: float = 1.2) -> list[str] | None:
+    """Scanners currently announced on the local network.
+
+    None means the check could not be done (no browse tool, or it failed),
+    which must not be reported as every network scanner having left.
+    """
+    if shutil.which("dns-sd"):
+        found: list[list[str]] = []
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            jobs = [
+                pool.submit(_dns_sd_browse, service, seconds)
+                for service in ("_uscan._tcp", "_ipp._tcp")
+            ]
+            for job in jobs:
+                names = job.result()
+                if names is not None:
+                    found.append(names)
+        if not found:
+            return None
+        return [name for group in found for name in group]
+    if not shutil.which("avahi-browse"):
+        return None
+    try:
+        done = subprocess.run(
+            ["avahi-browse", "-t", "-p", "-k", "_uscan._tcp"],
+            capture_output=True,
+            text=True,
+            timeout=max(seconds, 2),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    names = []
+    for line in done.stdout.splitlines():
+        parts = line.split(";")
+        # =;iface;protocol;name;type;domain
+        if len(parts) >= 4 and parts[0] in ("=", "+"):
+            names.append(parts[3])
+    return names
+
+
+def _usb_might_be_scanner(usb: list[dict]) -> bool:
+    """True when a plugged-in USB device is worth a driver listing."""
+    for device in usb:
+        name = device.get("name") or ""
+        vendor = VENDORS.get(device.get("vendor_id"))
+        if vendor is not None and (not vendor.get("printers") or looks_like_scanner(name)):
+            return True
+        if looks_like_scanner(name):
+            return True
+    return False
+
+
+def _on_usb_bus(device: dict, usb: list[dict]) -> bool:
+    """Whether this ready scanner's name still matches a plugged-in USB device."""
+    if device.get("connection") != "usb":
+        return True
+    return any(
+        names_match(device.get("name") or "", item.get("name") or "") for item in usb
+    )
+
+
+def watch_devices(*, allow_full_check: bool = True) -> dict:
+    """A fast readiness check for the page's poll.
+
+    Listing every driver takes several seconds and can disturb a scan that
+    is already running, so this asks the operating system which USB devices
+    are plugged in, and which scanners are still announced on the network.
+    A scanner that was ready and has left is reported gone at once. A new
+    USB device, while none is ready, triggers one full listing so it can
+    become Ready.
+    """
+    global _watch_usb_names
+    key = platform_key()
+    usb_ok = True
+    try:
+        usb = list_usb_devices(key)
+    except Exception:  # noqa: BLE001 - a failed bus check is not "unplugged"
+        usb = []
+        usb_ok = False
+
+    cached = cached_devices()
+    ready = list((cached or {}).get("devices") or [])
+    names = sorted({(item.get("name") or "").strip() for item in usb if item.get("name")})
+    bus_changed = usb_ok and _watch_usb_names is not None and names != _watch_usb_names
+    if usb_ok:
+        _watch_usb_names = names
+
+    if cached is None:
+        if not allow_full_check:
+            return {"devices": [], "unready": [], "errors": [], "watch": True, "unknown": True}
+        return _remember(check_devices())
+
+    # A successful read with nothing on the bus counts: on a laptop the
+    # scanner is often the only USB device, so unplugging it leaves the
+    # list empty. A failed read (usb_ok False) does not.
+    still = list(ready)
+    if usb_ok:
+        still = [device for device in still if _on_usb_bus(device, usb)]
+    if any(device.get("connection") == "network" for device in still):
+        announced = browse_network_scanners()
+        if announced is not None:
+            still = [
+                device
+                for device in still
+                if device.get("connection") != "network"
+                or any(
+                    names_match(device.get("name") or "", name) for name in announced
+                )
+            ]
+    if len(still) != len(ready):
+        report = dict(cached)
+        report["devices"] = still
+        report["checked_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+        report["watch"] = True
+        with _devices_lock:
+            _devices_cache["result"] = report
+            _devices_cache["at"] = time.monotonic()
+        return report
+
+    usb_ready = [device for device in ready if device.get("connection") == "usb"]
+    if (
+        allow_full_check
+        and bus_changed
+        and not usb_ready
+        and _usb_might_be_scanner(usb)
+    ):
+        return _remember(check_devices())
+
+    report = dict(cached)
+    report["watch"] = True
+    return report
 
 
 if __name__ == "__main__":

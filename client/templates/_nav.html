@@ -55,7 +55,9 @@
     {% endif %}
     <div class="sidebar-user-meta">
       <span class="sidebar-user-name">{{ current_user.name }}</span>
+      {% if not local_open_access %}
       <a class="sidebar-logout" href="{{ url_for('auth.logout') }}">Sign out</a>
+      {% endif %}
     </div>
   </div>
   {% endif %}

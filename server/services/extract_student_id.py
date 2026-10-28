@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +23,7 @@ from server.config import (
     DECLARATION_TOP_FRACTION,
     DECLARATION_WORK_WIDTH,
     FAST_MODE,
+    OCR_SAVE_CROPS,
     VISION_CONFIDENCE_BONUS,
     LAYOUT_TRUST_CONFIDENCE,
     LAYOUT_TRUST_ERROR,
@@ -93,7 +94,8 @@ class ExtractResult:
     # student_id. Without it the UI cannot show "read X, saved Y", which is
     # exactly the comparison someone needs to spot a wrong match.
     ocr_student_id: str = ""
-    # Seconds spent on this page. The skip log uses it.
+    # Seconds spent reading this page. Zero on a duplicate that reused an
+    # earlier reading. The scanner page shows it next to the row.
     elapsed_seconds: float = 0.0
     # A page that was never going to carry an ID. skip_reason is "blank",
     # "declaration", or "empty_id". Not an error, and not sent for lookup.
@@ -152,19 +154,38 @@ def extract_student_ids_from_upload_batch(data: bytes, filename: str) -> list[Ex
 
     total = len(pages)
     results: list[ExtractResult] = []
+    seen: dict[bytes, ExtractResult] = {}
     for index, image in enumerate(pages, start=1):
         page_source = filename if total == 1 else f"{filename} (page {index}/{total})"
-        try:
-            result = _extract(image, source=page_source)
-        except ExtractError as exc:
-            result = ExtractResult(
-                student_id="",
-                confidence=0.0,
-                form_language="unknown",
+        started = time.perf_counter()
+        fingerprint = _page_fingerprint(image)
+        prior = seen.get(fingerprint)
+        if prior is not None:
+            result = replace(
+                prior,
                 source=page_source,
-                message=exc.message,
-                error=exc.message,
+                message="duplicate page — reused the earlier reading",
+                elapsed_seconds=0.0,
             )
+            debug_log(f"[FAST] page {index}/{total} duplicates an earlier page")
+        else:
+            try:
+                result = _extract(image, source=page_source)
+            except ExtractError as exc:
+                result = ExtractResult(
+                    student_id="",
+                    confidence=0.0,
+                    form_language="unknown",
+                    source=page_source,
+                    message=exc.message,
+                    error=exc.message,
+                    elapsed_seconds=round(time.perf_counter() - started, 2),
+                )
+                debug_log(
+                    f"[TIME] page {index}/{total} {result.elapsed_seconds:.2f}s "
+                    f"unreadable"
+                )
+            seen[fingerprint] = result
         result.page_number = index
         result.page_count = total
         results.append(result)
@@ -500,6 +521,8 @@ def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
     # whatever the form says, so on a Hindi or Marathi page the candidate
     # language is routinely wrong.
     form_language = layout.language if layout is not None else language
+    elapsed = round(time.perf_counter() - started, 2)
+    debug_log(f"[TIME] {source} {elapsed:.2f}s id={student_id!r}")
     return ExtractResult(
         student_id=student_id,
         confidence=min(confidence, 0.99),
@@ -509,6 +532,7 @@ def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
         message="ocr_read — not yet checked against the database",
         found_in_db=False,
         student=None,
+        elapsed_seconds=elapsed,
     )
 
 
@@ -707,13 +731,20 @@ def _read_id_from_crop(
             debug_log("[VISION] clean read - skipped local recognizers")
             return found
 
-    # 1) RapidOCR on the crop alone (often best for blocky handwritten caps)
+    # 1) RapidOCR on the crop alone (often best for blocky handwritten caps).
+    # If it sees no text at all, the crop is not the ID line. EasyOCR then
+    # spends several seconds confirming that, which is what made a missed
+    # layout cost ~20s instead of ~2s.
+    rapid_failed = False
+    rapid_saw_text = False
     try:
         ocr = get_rapid_ocr()
         result, _ = ocr(crop_bgr)
         for item in result or []:
             text = str(item[1])
             conf = float(item[2])
+            if text.strip():
+                rapid_saw_text = True
             parsed = parse_student_id_from_text(text) or re.sub(
                 r"[^A-Za-z0-9]", "", text
             ).upper()
@@ -723,6 +754,7 @@ def _read_id_from_crop(
             elif _is_noisy_id_like(parsed):
                 found.append((parsed, min(conf, 0.65), language, f"crop-rapid-noisy:{label_text}"))
     except Exception as exc:  # noqa: BLE001
+        rapid_failed = True
         debug_log(f"[RapidOCR-crop] failed: {exc}")
 
     # 2) TrOCR handwriting model - off by default, see USE_TROCR in config
@@ -736,7 +768,9 @@ def _read_id_from_crop(
     # slowest, so in fast mode it only runs when nothing above produced a
     # cleanly-formatted ID and a second opinion would actually change things.
     have_clean = any(looks_like_student_id(row[0]) for row in found)
-    if not (FAST_MODE and have_clean):
+    if not rapid_failed and not rapid_saw_text:
+        debug_log("[FAST] RapidOCR saw no text on this crop - skipped EasyOCR")
+    elif not (FAST_MODE and have_clean):
         for text, conf in recognize_with_easyocr(crop_bgr):
             if looks_like_student_id(text):
                 found.append(
@@ -769,7 +803,16 @@ def _read_id_from_crop(
     return found
 
 
+def _page_fingerprint(image_bgr: np.ndarray) -> bytes:
+    """Coarse hash of a page, enough to spot the same sheet scanned twice."""
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    small = cv2.resize(gray, (32, 32), interpolation=cv2.INTER_AREA)
+    return small.tobytes()
+
+
 def _save_debug_crop(crop_bgr: np.ndarray, tag: str) -> None:
+    if not OCR_SAVE_CROPS:
+        return
     try:
         DEBUG_CROP_DIR.mkdir(parents=True, exist_ok=True)
         stamp = now_ist().strftime("%H%M%S")
@@ -802,7 +845,7 @@ def _with_db_lookup(
         "column": "student_id",
         "sql": (
             f"SELECT * FROM {STUDENT_TABLE} "
-            f"WHERE UPPER(TRIM(student_id)) = UPPER(%s) "
+            f"WHERE student_id = %s "
             f"(exact, safe variant, or unique constrained repair)"
         ),
         "sql_param": result.student_id,

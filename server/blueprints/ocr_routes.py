@@ -231,7 +231,7 @@ def extract_api():
     if not _is_allowed(filename):
         return jsonify(
             {
-                "error": "Unsupported file type. Use JPG, PNG, or PDF from CamScanner or printer scanner."
+                "error": "Unsupported file type. Use JPG, PNG, BMP, TIFF, or PDF."
             }
         ), 400
 
@@ -276,7 +276,7 @@ def extract_batch_api():
     if not _is_allowed(filename):
         return jsonify(
             {
-                "error": "Unsupported file type. Use JPG, PNG, or PDF from CamScanner or printer scanner."
+                "error": "Unsupported file type. Use JPG, PNG, BMP, TIFF, or PDF."
             }
         ), 400
 

@@ -11,7 +11,7 @@ load_dotenv(BASE_DIR / ".env")
 DATA_DIR = BASE_DIR / "data"
 UPLOAD_FOLDER = DATA_DIR / "uploads"
 MAX_CONTENT_LENGTH = 100 * 1024 * 1024  # 100 MB — a full ADF stack of scans
-ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf"}
+ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf", ".bmp", ".tif", ".tiff", ".webp"}
 
 # MySQL RDS (AFDW) — from .env
 DB_HOST = os.getenv("DB_HOST", "")
@@ -47,6 +47,15 @@ GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 # Only Google accounts on this email domain may sign in — leave blank to allow any
 ALLOWED_EMAIL_DOMAIN = os.getenv("ALLOWED_EMAIL_DOMAIN", "").strip().lower()
+
+# Local development only. When set, the login gate is skipped and pages open
+# without Google. Leave unset on the live server — the OAuth client there
+# only accepts the production redirect URI.
+LOCAL_OPEN_ACCESS = os.getenv("LOCAL_OPEN_ACCESS", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 # Tether SSO — must equal JWT_SECRET in the Tether server .env. Tether signs a
 # 10-minute token and appends it to this app's URL; see services/sso.py.
@@ -120,6 +129,19 @@ VISION_CONFIDENCE_BONUS = 0.15
 #   enough to skip the full-page label OCR, which costs ~3.7s a page and is
 #   only there to locate a field the layout already found.
 FAST_MODE = os.getenv("FAST_MODE", "1").strip().lower() in ("1", "true", "yes")
+# Scanner JPEGs arrive near 600 DPI (about 5000x7000). PDFs are already
+# rendered at 200 DPI, which is what the field crop and recognisers were
+# tuned on. Anything taller than this is shrunk before OCR. The Student ID
+# crop stays sharp enough, and EasyOCR stops spending most of the page on
+# pixels it does not use.
+MAX_OCR_LONG_SIDE = int(os.getenv("MAX_OCR_LONG_SIDE", "2400"))
+# Debug crops under logs/crops. Off by default: writing one JPEG per
+# recogniser pass is pure overhead on a batch.
+OCR_SAVE_CROPS = os.getenv("OCR_SAVE_CROPS", "0").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 # Below this fraction of dark pixels a page carries no form at all.
 # Real forms measure 4-6%; a blank reverse with bleed-through is under 1%.
 BLANK_PAGE_INK_RATIO = 0.02

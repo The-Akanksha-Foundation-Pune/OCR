@@ -208,16 +208,30 @@ def looks_like_student_id(text: str) -> bool:
 
 
 def enhance_id_crop(crop_bgr: np.ndarray) -> np.ndarray:
-    """Upscale + contrast boost for small handwritten ID crops."""
+    """Upscale + contrast boost for small handwritten ID crops.
+
+    A crop that is already tall enough is not enlarged. On a 600 DPI scan the
+    old 2.5x scale handed EasyOCR a crop several times larger than it needs,
+    and that pass was most of the page time.
+    """
     if crop_bgr is None or crop_bgr.size == 0:
         return crop_bgr
     h, w = crop_bgr.shape[:2]
-    scale = max(2.5, 120 / max(h, 1))
-    enlarged = cv2.resize(
-        crop_bgr,
-        (max(1, int(w * scale)), max(1, int(h * scale))),
-        interpolation=cv2.INTER_CUBIC,
-    )
+    target_h = 140
+    if h > 200:
+        scale = 160 / h
+    elif h >= target_h:
+        scale = 1.0
+    else:
+        scale = target_h / max(h, 1)
+    if scale == 1.0:
+        enlarged = crop_bgr
+    else:
+        enlarged = cv2.resize(
+            crop_bgr,
+            (max(1, int(w * scale)), max(1, int(h * scale))),
+            interpolation=cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA,
+        )
     gray = cv2.cvtColor(enlarged, cv2.COLOR_BGR2GRAY)
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
     boosted = clahe.apply(gray)

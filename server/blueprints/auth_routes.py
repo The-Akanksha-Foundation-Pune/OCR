@@ -6,7 +6,7 @@ import time
 
 from flask import Blueprint, redirect, render_template, request, session, url_for
 
-from server.config import ALLOWED_EMAIL_DOMAIN
+from server.config import ALLOWED_EMAIL_DOMAIN, LOCAL_OPEN_ACCESS
 from server.services.access_control import is_authorized_staff
 from server.services.auth import current_user
 from server.services.debug_log import debug_log
@@ -36,6 +36,8 @@ def login():
 
 @auth_bp.get("/login/google")
 def google_login():
+    if LOCAL_OPEN_ACCESS:
+        return redirect(_safe_next_path(request.args.get("next")) or url_for("ocr.index"))
     session["post_login_next"] = _safe_next_path(request.args.get("next"))
     redirect_uri = url_for("auth.google_callback", _external=True)
     # access_type=offline + prompt=consent so we get a refresh token for Drive uploads

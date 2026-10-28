@@ -14,6 +14,7 @@ from server.config import (
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
     GOOGLE_OAUTH_SCOPES,
+    LOCAL_OPEN_ACCESS,
     MAX_CONTENT_LENGTH,
     SECRET_KEY,
     UPLOAD_FOLDER,
@@ -62,7 +63,10 @@ def create_app() -> Flask:
 
     @app.context_processor
     def inject_current_user():
-        return {"current_user": current_user()}
+        return {
+            "current_user": current_user(),
+            "local_open_access": LOCAL_OPEN_ACCESS,
+        }
 
     # Under gunicorn each worker warms its own copy; that is the point.
     warm_models_in_background()

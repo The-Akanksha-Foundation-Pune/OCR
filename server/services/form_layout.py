@@ -86,6 +86,12 @@ def _merge_close_rows(
     return merged
 
 
+# Same grid the loop used to walk. Built once: identify_form runs on every
+# page, and the nested Python loops were a third of a second each.
+_SCALES = np.arange(0.85, 1.151, 0.01)
+_OFFSETS = np.arange(-0.12, 0.1201, 0.005)
+
+
 def _match_language(
     observed: list[float], expected: list[float]
 ) -> tuple[float, float, float]:
@@ -99,26 +105,19 @@ def _match_language(
     if not observed or not expected:
         return float("inf"), 1.0, 0.0
 
-    best = (float("inf"), 1.0, 0.0)
     obs = np.asarray(observed, dtype=float)
     exp = np.asarray(expected, dtype=float)
 
-    # Real scans drift further than this once used to allow: a Fujitsu ADF
+    # Real scans drift further than a tight grid used to allow: a Fujitsu ADF
     # crops differently from the template PDFs, and runs were settling on
     # scale=1.08 / offset=+0.06 - both pinned at the old limits, which means
     # the true fit was outside the range and the match landed on the wrong
-    # rules. The search is cheap (identify_form costs ~0.05s), so widen it
-    # rather than mis-fit.
-    for scale in np.arange(0.85, 1.151, 0.01):
-        for offset in np.arange(-0.12, 0.1201, 0.005):
-            projected = exp * scale + offset
-            # distance from each expected row to the closest observed rule
-            errors = np.abs(projected[:, None] - obs[None, :]).min(axis=1)
-            score = float(errors.mean())
-            if score < best[0]:
-                best = (score, float(scale), float(offset))
-
-    return best
+    # rules. Widen the search rather than mis-fit.
+    # projected shape: (scale, offset, expected row)
+    projected = exp[None, None, :] * _SCALES[:, None, None] + _OFFSETS[None, :, None]
+    errors = np.abs(projected[..., None] - obs).min(axis=-1).mean(axis=-1)
+    scale_i, offset_i = np.unravel_index(int(errors.argmin()), errors.shape)
+    return float(errors[scale_i, offset_i]), float(_SCALES[scale_i]), float(_OFFSETS[offset_i])
 
 
 def identify_form(image_bgr: np.ndarray) -> FormMatch | None:

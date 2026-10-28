@@ -634,6 +634,13 @@ class Handler(BaseHTTPRequestHandler):
 
         if route.path == "/devices":
             refresh = (query.get("refresh") or [""])[0].lower() in ("1", "true", "yes")
+            watch = (query.get("watch") or [""])[0].lower() in ("1", "true", "yes")
+            if watch:
+                # USB presence only. Safe while a stack is feeding, because
+                # it does not talk to the scanner driver.
+                return self._json(
+                    scanner_devices.watch_devices(allow_full_check=_running_job() is None)
+                )
             cached = scanner_devices.cached_devices()
             if cached is not None and _running_job() is not None:
                 # Listing asks every driver for its scanners, which can
