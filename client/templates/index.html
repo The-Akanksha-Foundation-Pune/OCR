@@ -487,8 +487,11 @@
     // so the confirm modal walks through them one at a time.
     let pageQueue = [];
     let pageIndex = 0;
-    // blank: backs of single-sided forms that a duplex scan left out.
-    let batchSummary = { saved: 0, notFound: 0, skipped: 0, review: 0, blank: 0 };
+    // blank / declaration / emptyId: pages that were never going to carry an ID.
+    let batchSummary = {
+      saved: 0, notFound: 0, skipped: 0, review: 0,
+      blank: 0, declaration: 0, emptyId: 0,
+    };
     // True while files are still being read in the background — lets the
     // very first page pop up as soon as it's ready, instead of waiting for
     // every selected file to finish OCR first.
@@ -814,8 +817,17 @@
 
     function appendPages(newPages) {
       if (!newPages || newPages.length === 0) return;
+      const kept = [];
+      newPages.forEach((page) => {
+        if (noteSkipped(page)) return;
+        kept.push(page);
+      });
+      if (kept.length === 0) {
+        if (!filesLoading && pageQueue.length === 0 && !autoRunning) finishBatch();
+        return;
+      }
       const hadNothingYet = pageQueue.length === 0;
-      pageQueue.push(...newPages);
+      pageQueue.push(...kept);
 
       if (autoModeOn()) {
         // No modal in automatic mode - each page is looked up as it lands,
@@ -905,7 +917,14 @@
           (batchSummary.review > 0
             ? `, ${batchSummary.review} waiting for you to check.`
             : `.`) +
-          blankSidesNote();
+          skipSummaryText();
+        return;
+      }
+
+      if (total === 0 && skipSummaryText()) {
+        statusEl.hidden = false;
+        statusEl.className = "status ok";
+        statusText.textContent = "Nothing to confirm." + skipSummaryText();
         return;
       }
 
@@ -928,14 +947,44 @@
         (batchSummary.review > 0
           ? `, ${batchSummary.review} waiting for you to check.`
           : `.`) +
-        blankSidesNote();
+        skipSummaryText();
     }
 
-    // A duplex scan leaves out the blank back of each single-sided form.
-    // Say how many, so the page count still adds up to the stack.
-    function blankSidesNote() {
+    // Pages that were never going to carry an ID. Counted so the stack still
+    // adds up, and not listed as unreadable or opened for confirmation.
+    function skipReason(page) {
+      if (!page) return "";
+      if (page.skip_reason) return page.skip_reason;
+      if (page.blank) return "blank";
+      return "";
+    }
+
+    function noteSkipped(page) {
+      const reason = skipReason(page);
+      if (!reason) return false;
+      if (reason === "declaration") batchSummary.declaration += 1;
+      else if (reason === "empty_id") batchSummary.emptyId += 1;
+      else batchSummary.blank += 1;
+      return true;
+    }
+
+    function skipSummaryText() {
+      const parts = [];
+      const declaration = batchSummary.declaration || 0;
+      const emptyId = batchSummary.emptyId || 0;
       const blank = batchSummary.blank || 0;
-      return blank ? ` ${blank} blank reverse side(s) left out.` : "";
+      if (declaration) {
+        parts.push(`${declaration} declaration page${declaration === 1 ? "" : "s"}`);
+      }
+      if (emptyId) {
+        parts.push(`${emptyId} empty ID ${emptyId === 1 ? "copy" : "copies"}`);
+      }
+      if (blank) {
+        parts.push(`${blank} blank side${blank === 1 ? "" : "s"}`);
+      }
+      if (!parts.length) return "";
+      if (parts.length === 1) return ` ${parts[0]} skipped.`;
+      return ` ${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]} skipped.`;
     }
 
     async function confirmAndSave() {
@@ -1242,7 +1291,10 @@
       batchGeneration += 1;
       pageQueue = [];
       pageIndex = 0;
-      batchSummary = { saved: 0, notFound: 0, skipped: 0, review: 0, blank: 0 };
+      batchSummary = {
+        saved: 0, notFound: 0, skipped: 0, review: 0,
+        blank: 0, declaration: 0, emptyId: 0,
+      };
       batchNotice = null;
       waitingForMore = false;
       autoRunning = false;
@@ -1747,16 +1799,16 @@
         const response = await fetch(API_BASE + "/api/extract", { method: "POST", body });
         const page = await response.json();
         if (!response.ok) {
+          const blank =
+            page.blank === true ||
+            (response.status === 422 && /looks blank/i.test(page.error || ""));
           return {
             student_id: "",
             display_page: number,
-            error: page.error || "Could not read this page.",
-            // The server skips OCR on a page with almost no ink. It may say
-            // so with a flag; today it says so only in words, so those are
-            // matched as well.
-            blank:
-              page.blank === true ||
-              (response.status === 422 && /looks blank/i.test(page.error || "")),
+            error: blank ? "" : (page.error || "Could not read this page."),
+            skipped: blank,
+            skip_reason: blank ? "blank" : "",
+            blank,
           };
         }
         // Each page is stashed on its own, so page_number stays 1 - that is
@@ -2020,11 +2072,11 @@
               const page = await readAgentPage(captured.number, captured.base64);
               read = captured.number;
               helperScan.fetched = read;
-              if (page.blank && settings.source === "duplex") {
-                // The back of a single-sided form. Counted rather than
-                // listed - otherwise every sheet adds an "unreadable" row,
-                // or a Confirm box of its own when checking by hand.
-                batchSummary.blank += 1;
+              if (skipReason(page)) {
+                // Blank, declaration, or an empty ID box. Counted rather
+                // than listed - otherwise every sheet adds an "unreadable"
+                // row, or a Confirm box of its own when checking by hand.
+                noteSkipped(page);
               } else {
                 page.helper_job = jobId;
                 helperScan.open.push(captured.number);
@@ -2063,9 +2115,8 @@
           // why, next to the button that was pressed.
           showScannerMessage(
             failure ||
-              (batchSummary.blank
-                ? `All ${batchSummary.blank} side(s) scanned came back blank, so there ` +
-                  "was nothing to read. Check the right stack is in the feeder, then scan again."
+              (skipSummaryText()
+                ? "Nothing to confirm." + skipSummaryText()
                 : resume
                   ? "Every page of the scan that was running before this page was " +
                     "reloaded had already been read."

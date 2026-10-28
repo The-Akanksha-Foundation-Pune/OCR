@@ -57,6 +57,11 @@ def _read_and_record(result: ExtractResult, batch: dict, link: str) -> str:
     school = batch.get("school") or None
     location = batch.get("location") or None
 
+    if result.skipped or result.skip_reason:
+        # Blank, declaration, or an empty ID box. Counted on the batch below,
+        # not written to History as an unread form.
+        return ""
+
     if not result.student_id:
         # Nothing readable on the page. Recorded so the person sees a row for
         # every sheet they fed, not a silent gap.
@@ -95,12 +100,15 @@ def process_file(entry: dict, batch: dict) -> None:
 
     link = drive_inbox.file_link(file_id)
     results = extract_student_ids_from_upload_batch(drive_inbox.download(file_id), name)
-    labels = [_read_and_record(result, batch, link) for result in results]
+    labels = [label for label in (_read_and_record(result, batch, link) for result in results) if label]
 
     # One page -> the app's usual name. A multi-page PDF keeps its own name
-    # with a marker, since it holds several students.
+    # with a marker, since it holds several students. A file whose every page
+    # was blank, a declaration, or an empty ID box is not "[unread]".
     ext = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ".jpg"
-    if len(labels) == 1:
+    if not labels:
+        new_name = f"[skipped] {name}"
+    elif len(labels) == 1:
         # An unread page keeps its original name so it can still be found.
         new_name = f"[unread] {name}" if labels[0] == "[unread]" else f"{labels[0]}{ext}"
     else:
