@@ -686,13 +686,68 @@ def claim_next(now_ms: int | None = None) -> Claim | None:
     _reading_dir().mkdir(parents=True, exist_ok=True)
     stamp = int(time.time() * 1000) if now_ms is None else now_ms
     for page_id in waiting:
-        marker = _reading_dir() / f"{page_id}.{stamp}.{secrets.token_hex(6)}"
+        marker = _reading_dir() / f"{page_id}.{stamp}.{_claim_token()}"
         try:
             os.rename(_pending_dir() / page_id, marker)
         except FileNotFoundError:
             continue  # another reader took it first
         return Claim(page_id=page_id, marker=marker, claimed_ms=stamp)
     return None
+
+
+def _claim_token() -> str:
+    """The claim's token: this process's id, then randomness.
+
+    Carrying the pid lets the next worker on this machine hand a dead
+    reader's page back at once (reclaim_orphaned) - a restart, or a deploy,
+    would otherwise leave that page waiting out the full stale timeout.
+    """
+    return f"{os.getpid() & 0xFFFFFFFF:08x}{secrets.token_hex(4)}"
+
+
+def _pid_alive(pid: int) -> bool:
+    """Whether a process with this id is running on this machine (POSIX only)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # it exists; it just is not ours to signal
+    return True
+
+
+def reclaim_orphaned() -> list[str]:
+    """Hand back at once the pages whose reader process has gone.
+
+    Only claims written with a pid (16-hex tokens from _claim_token) are
+    judged; anything else waits for reclaim_stale. Skipped on Windows, where
+    os.kill(pid, 0) would terminate the process rather than test for it.
+
+    Returns:
+        The ids of the pages put back in the queue.
+    """
+    if os.name != "posix":
+        return []
+    try:
+        names = os.listdir(_reading_dir())
+    except FileNotFoundError:
+        return []
+    returned: list[str] = []
+    for name in names:
+        match = _CLAIM_NAME.fullmatch(name)
+        if not match or len(match["token"]) != 16:
+            continue
+        pid = int(match["token"][:8], 16)
+        if pid == os.getpid() or _pid_alive(pid):
+            continue
+        _pending_dir().mkdir(parents=True, exist_ok=True)
+        try:
+            os.rename(_reading_dir() / name, _pending_dir() / match["page"])
+        except FileNotFoundError:
+            continue  # finished, or another sweep got there first
+        returned.append(match["page"])
+        debug_log(f"[QUEUE] page {match['page']}: its reader (pid {pid}) has stopped; queued again")
+    return returned
 
 
 def still_held(claim: Claim) -> bool:

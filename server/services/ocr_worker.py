@@ -369,6 +369,7 @@ def _maybe_reclaim() -> None:
         return
     _last_reclaim = now
     try:
+        scan_queue.reclaim_orphaned()
         scan_queue.reclaim_stale()
     except OSError as exc:
         debug_log(f"[WORKER] stale-claim sweep failed: {exc}")

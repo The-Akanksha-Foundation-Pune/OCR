@@ -30,8 +30,20 @@ class BlockedInTests(RuntimeError):
 
 # ---------------------------------------------------------------- safety net
 @pytest.fixture(autouse=True)
-def _block_the_outside_world(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No real database, no Google APIs, no outbound sockets - ever."""
+def _block_the_outside_world(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """No real database, no Google APIs, no outbound sockets - ever.
+
+    Also keeps tests out of the real logs/ and data/queue/: test lines in
+    logs/ocr_debug.log make a live problem hard to read, and a stray sweep
+    of data/queue could move a person's real queued pages. Tests that use
+    the queue_dir fixture point the queue elsewhere again.
+    """
+    from server.services import debug_log, scan_queue
+
+    monkeypatch.setattr(debug_log, "LOG_DIR", tmp_path / "logs")
+    monkeypatch.setattr(debug_log, "LOG_FILE", tmp_path / "logs" / "ocr_debug.log")
+    monkeypatch.setattr(scan_queue, "QUEUE_DIR", tmp_path / "queue")
+
     import pymysql
 
     def refuse_db(*_args: Any, **_kwargs: Any) -> Any:
