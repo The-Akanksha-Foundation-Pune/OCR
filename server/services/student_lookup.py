@@ -26,7 +26,7 @@ from server.config import (
 from server.services.clock import now_ist
 from server.services.debug_log import debug_log
 from server.services.devanagari import prefix_similarity, split_id
-from server.services.id_shape import shape_variants
+from server.services.id_shape import ID_DIGITS, shape_variants
 
 # Cache of every active student_id (small table — a few thousand rows) so
 # fuzzy repair can score against the WHOLE list, not just rows that happen
@@ -34,6 +34,33 @@ from server.services.id_shape import shape_variants
 _ID_CACHE_TTL_SECONDS = 300
 _id_cache: dict = {}
 _id_cache_at: dict = {}
+
+
+# How long a connection may take to open. Every lookup waits this long when
+# the database is down; the OCR worker's outage probe waits far less, since
+# all it has to learn is whether the database is back.
+CONNECT_TIMEOUT_SECONDS = 20
+PROBE_CONNECT_TIMEOUT_SECONDS = 5
+
+
+class DatabaseNotConfigured(RuntimeError):
+    """The .env has no database to connect to (DB_HOST, DB_USER or DB_NAME unset)."""
+
+
+# What a lookup that could not be answered looks like to a caller: no
+# connection, a dropped one, a rejected query, or the database not being
+# configured at all. Callers must tell these apart from None, which means
+# the database answered "no such student".
+#
+# Not RuntimeError as a whole: RecursionError and NotImplementedError are
+# RuntimeErrors too, and they are bugs that fail the same file every time.
+# Called an outage, the inbox would retry that file on every pass for ever
+# instead of parking it as failed.
+DB_ERRORS: tuple[type[BaseException], ...] = (
+    pymysql.MySQLError,
+    OSError,
+    DatabaseNotConfigured,
+)
 
 # Common handwriting / OCR confusions in digit sections
 _OCR_VARIANTS = str.maketrans(
@@ -49,9 +76,19 @@ _OCR_VARIANTS = str.maketrans(
 )
 
 
-def get_connection():
+def get_connection(connect_timeout: float | None = None) -> pymysql.connections.Connection:
+    """Open a connection to the student database.
+
+    Args:
+        connect_timeout: Seconds to wait for the server to answer;
+            CONNECT_TIMEOUT_SECONDS when None, as every caller but the
+            outage probe wants.
+
+    Raises:
+        DatabaseNotConfigured: DB_HOST, DB_USER or DB_NAME is unset.
+    """
     if not DB_HOST or not DB_USER or not DB_NAME:
-        raise RuntimeError("Database is not configured. Check .env DB_* values.")
+        raise DatabaseNotConfigured("Database is not configured. Check .env DB_* values.")
 
     return pymysql.connect(
         host=DB_HOST,
@@ -59,9 +96,33 @@ def get_connection():
         password=DB_PASS,
         database=DB_NAME,
         port=DB_PORT,
-        connect_timeout=20,
+        connect_timeout=CONNECT_TIMEOUT_SECONDS if connect_timeout is None else connect_timeout,
         cursorclass=pymysql.cursors.DictCursor,
     )
+
+
+def probe_database(connect_timeout: float = PROBE_CONNECT_TIMEOUT_SECONDS) -> None:
+    """Ask the student database the cheapest question there is, to see whether it is back.
+
+    The OCR worker asks this while it is paused for an outage, rather than
+    sending a page's lookup to wait out the full CONNECT_TIMEOUT_SECONDS
+    only to learn what this learns in a few.
+
+    Args:
+        connect_timeout: Seconds to wait for the server to answer.
+
+    Raises:
+        DatabaseNotConfigured: DB_HOST, DB_USER or DB_NAME is unset.
+        pymysql.MySQLError: The server could not be reached or refused us.
+        OSError: The network failed underneath the connection.
+    """
+    conn = get_connection(connect_timeout=connect_timeout)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            cur.fetchone()
+    finally:
+        conn.close()
 
 
 def resolve_scope(school: str | None, location: str | None) -> list[str]:
@@ -178,13 +239,19 @@ def find_student_by_id(
                 # writes, without changing the MySQL time zone (which would
                 # also move NOW() and TIMESTAMP columns for every query on
                 # the connection).
+                #
+                # Only the matched child's row: a Student ID is not unique
+                # (a few are held by two children in different schools), and
+                # the lookup picked this one by its school.
+                school_clause, school_params = _same_school_clause(row.get("school_name"))
                 cur.execute(
                     f"""
                     UPDATE {STUDENT_TABLE}
                     SET scanned_at = %s
                     WHERE UPPER(TRIM(student_id)) = UPPER(%s)
+                      AND {school_clause}
                     """,
-                    (now_ist(), matched_id),
+                    (now_ist(), matched_id, *school_params),
                 )
                 conn.commit()
                 debug_log(f"[DB] scanned_at updated for {matched_id!r}")
@@ -193,9 +260,10 @@ def find_student_by_id(
                     SELECT scanned_at
                     FROM {STUDENT_TABLE}
                     WHERE UPPER(TRIM(student_id)) = UPPER(%s)
+                      AND {school_clause}
                     LIMIT 1
                     """,
-                    (matched_id,),
+                    (matched_id, *school_params),
                 )
                 updated = cur.fetchone()
                 if updated:
@@ -204,6 +272,22 @@ def find_student_by_id(
             return _serialize_student(row)
     finally:
         conn.close()
+
+
+def _same_school_clause(school_name: Any) -> tuple[str, tuple[str, ...]]:
+    """A WHERE condition (and its parameters) for rows of one child's school.
+
+    Args:
+        school_name: The matched row's school_name, which may be NULL.
+
+    Returns:
+        The condition and its parameters. A row with no school matches only
+        rows with no school, the way history_store.resolve_attempt does.
+    """
+    school = str(school_name or "").strip()
+    if school:
+        return "UPPER(TRIM(school_name)) = UPPER(%s)", (school,)
+    return "(school_name IS NULL OR TRIM(school_name) = '')", ()
 
 
 def schools_in_location(location: str) -> list[str]:
@@ -360,7 +444,6 @@ def _get_all_student_ids(cur, scope: list[str] | None = None) -> list[str]:
     matching the wrong child: it cuts ~16,500 candidates to a few hundred,
     and every cross-school near-twin stops being reachable at all.
     """
-    global _id_cache, _id_cache_at
     key = "|".join(sorted(name.strip().upper() for name in (scope or [])))
     now = time.monotonic()
 
@@ -586,7 +669,7 @@ def _constrained_repair_lookup(
 
 
 def _digit_suffix_lookup(
-    cur, ocr_id: str, scope: list[str] | None = None
+    cur: Any, ocr_id: str, scope: list[str] | None = None
 ) -> dict[str, Any] | None:
     """
     Anchor on the digits, rank on the letters.
@@ -599,9 +682,20 @@ def _digit_suffix_lookup(
 
     The digits are a birth date, so up to 13 students share one — the
     margin check below is what keeps that from picking the wrong child.
+
+    The whole date has to be there. Four or five digits are a month and a
+    year, shared by every classmate born that month. And constrained repair
+    already refuses a reading that has lost characters as too short to
+    guess from, so the same length guard applies here - otherwise this path
+    makes the very guess that one turned down.
     """
     letters, digits = split_id(ocr_id)
-    if len(digits) < 4 or not letters:
+    if len(digits) != ID_DIGITS or not letters:
+        if letters and digits:
+            debug_log(
+                f"[DB] digit-suffix skipped: {len(digits)} digits read, "
+                f"a full date of birth is {ID_DIGITS}"
+            )
         return None
 
     shortlist = [
@@ -633,6 +727,12 @@ def _digit_suffix_lookup(
         return None
     if second_score and (best_score - second_score) < 0.08:
         debug_log("[DB] digit-suffix rejected: ambiguous between students")
+        return None
+    if abs(len(best_id) - len(ocr_id)) > MAX_REPAIR_LENGTH_DELTA:
+        debug_log(
+            f"[DB] digit-suffix rejected: read {len(ocr_id)} chars against a "
+            f"{len(best_id)}-char ID, too much is missing to guess from"
+        )
         return None
 
     return _exact_lookup(cur, best_id, scope=scope)

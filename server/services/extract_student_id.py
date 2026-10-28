@@ -14,15 +14,17 @@ from server.config import (
     BASE_DIR,
     BLANK_PAGE_INK_RATIO,
     FAST_MODE,
-    VISION_CONFIDENCE_BONUS,
     LAYOUT_TRUST_CONFIDENCE,
     LAYOUT_TRUST_ERROR,
     USE_TROCR,
+    VISION_CONFIDENCE_BONUS,
 )
 from server.services.clock import now_ist
 from server.services.debug_log import debug_log
 from server.services.deskew import deskew
 from server.services.field_detector import (
+    LabelHit,
+    _score_label,
     crop_student_id_value,
     crop_template_value,
     crop_value_roi,
@@ -32,8 +34,6 @@ from server.services.field_detector import (
     parse_student_id_from_text,
 )
 from server.services.form_layout import identify_form
-from server.services.vision_ocr import is_configured as vision_configured
-from server.services.vision_ocr import recognize_with_vision
 from server.services.handwriting_ocr import (
     looks_like_student_id,
     recognize_devanagari_id,
@@ -41,6 +41,8 @@ from server.services.handwriting_ocr import (
     recognize_with_easyocr,
 )
 from server.services.history_store import log_scan_attempt
+from server.services.id_shape import as_student_id, loggable_reading
+from server.services.id_shape import looks_like_student_id as has_student_id_shape
 from server.services.preprocess import (
     count_pages_from_bytes,
     load_image_from_bytes,
@@ -49,7 +51,9 @@ from server.services.preprocess import (
     load_pages_from_bytes,
     preprocess_for_ocr,
 )
-from server.services.student_lookup import find_student_by_id
+from server.services.student_lookup import DB_ERRORS, find_student_by_id
+from server.services.vision_ocr import is_configured as vision_configured
+from server.services.vision_ocr import recognize_with_vision
 
 DEBUG_CROP_DIR = BASE_DIR / "logs" / "crops"
 
@@ -63,6 +67,32 @@ STRICT_FORMAT_BONUS = 0.25
 # handwriting it happens to overlap.
 LABEL_LINE_CONFIDENCE = 0.55
 
+# What every reading path says when nothing on the page has the shape of a
+# Student ID. Worded so it cannot be mistaken for the blank-page message,
+# which the page tells apart by its "looks blank".
+NO_STUDENT_ID_MESSAGE = (
+    "No Student ID found on this page (letters then digits, e.g. "
+    "AADMIS310714). The handwriting may be unclear - type the ID from the "
+    "paper, or rescan with the Student ID line sharp."
+)
+
+# The tallest crop Cloud Vision may see, as a fraction of page height.
+# The value-field crops measure 0.030-0.052 of the page with their padding
+# (template ROI 0.030-0.035, rule-located layout ROI 0.046-0.052), about
+# one and a half form rows. A label crop is 3.2x the height of whatever line
+# was taken for the label, and the one that sent a parent's name, email and
+# phone number to Vision was 0.079 - three rows of contact details.
+VISION_MAX_CROP_HEIGHT = 0.065
+
+# How sure _score_label must be that a line is the Student ID label before
+# the crop beside it may go to Vision. 2.5 and up means the line names the
+# student ("Student ID", "विद्यार्थी आयडी"); a bare "ID" scores 2.0, and that
+# is also how "ईमेल आईडी" - the email line - would score.
+STUDENT_LABEL_SCORE = 2.5
+
+# Server-only fields: never sent to the browser.
+_INTERNAL_FIELDS = ("db_error",)
+
 
 @dataclass
 class ExtractResult:
@@ -74,8 +104,10 @@ class ExtractResult:
     message: str = "ok"
     found_in_db: bool = False
     student: dict[str, Any] | None = None
+    # Kept so older callers that read it still work. A failed lookup now
+    # raises LookupUnavailable instead, so this stays None, and it is never
+    # sent to the browser either way.
     db_error: str | None = None
-    db_debug: dict[str, Any] | None = None
     error: str | None = None
     page_number: int = 1
     page_count: int = 1
@@ -84,8 +116,12 @@ class ExtractResult:
     # exactly the comparison someone needs to spot a wrong match.
     ocr_student_id: str = ""
 
-    def to_dict(self) -> dict:
-        return asdict(self)
+    def to_dict(self) -> dict[str, Any]:
+        """The result as API JSON, without anything about the server's internals."""
+        data = asdict(self)
+        for name in _INTERNAL_FIELDS:
+            data.pop(name, None)
+        return data
 
 
 class ExtractError(Exception):
@@ -95,6 +131,22 @@ class ExtractError(Exception):
         super().__init__(message)
         self.message = message
         self.status_code = status_code
+
+
+class LookupUnavailable(ExtractError):
+    """The student database could not be asked, so there is no answer yet.
+
+    Not the same thing as "not found". Treating an outage as a miss filed
+    real students' forms as NOTFOUND_ in Drive, logged them under Not found
+    and renamed inbox files so they were never read again. Raising instead
+    leaves nothing saved, logged or renamed, so the page can simply be tried
+    again once the database is back.
+    """
+
+    MESSAGE = "The student database could not be reached. Nothing was saved - try again."
+
+    def __init__(self, message: str = MESSAGE) -> None:
+        super().__init__(message, status_code=503)
 
 
 def extract_student_id_from_path(file_path: str | Path) -> ExtractResult:
@@ -226,6 +278,65 @@ def extract_one_image(path, page_number: int, total: int) -> ExtractResult:
     return result
 
 
+def extract_from_image(image_bgr: np.ndarray, source: str) -> ExtractResult:
+    """OCR one page image already in memory, never raising for an unreadable page.
+
+    The scan queue's worker reads pages it has stored itself, so there is
+    no file to decode. A page OCR cannot read comes back with an empty
+    student_id and `error` set, as extract_one_image does. No database is
+    touched.
+
+    Args:
+        image_bgr: The upright page, BGR.
+        source: How to name the page in the log and in the result.
+
+    Returns:
+        The reading.
+    """
+    try:
+        return _extract(image_bgr, source=source)
+    except LookupUnavailable:
+        raise
+    except ExtractError as exc:
+        return ExtractResult(
+            student_id="",
+            confidence=0.0,
+            form_language="unknown",
+            source=source,
+            message=exc.message,
+            error=exc.message,
+        )
+
+
+def lookup_student_read_only(
+    student_id: str, *, school: str | None = None, location: str | None = None
+) -> dict[str, Any] | None:
+    """Look a reading up within a school or city, writing nothing.
+
+    What the scan queue's worker records for each page, and what a typed
+    Student ID is checked against, before a person confirms the document.
+    Only the confirm marks scanned_at.
+
+    Args:
+        student_id: The reading.
+        school: Only this school's students.
+        location: Otherwise only this city's.
+
+    Returns:
+        The matched student, or None when there is none.
+
+    Raises:
+        LookupUnavailable: The database could not be asked.
+    """
+    try:
+        return find_student_by_id(
+            student_id, mark_scanned=False, school=school, location=location
+        )
+    except DB_ERRORS as exc:
+        debug_log(f"[DB] read-only lookup failed: {type(exc).__name__}: {exc}")
+        raise LookupUnavailable() from exc
+
+
 def confirm_student_id(
     student_id: str,
     source: str = "manual-confirm",
@@ -239,10 +350,28 @@ def confirm_student_id(
     Final step after the user reviews (and optionally corrects) the OCR
     preview in the UI. Looks up the given Student ID and, if found, marks
     scanned_at — this is the only place scanned_at gets written.
+
+    Raises ExtractError (400) for something that is not shaped like a
+    Student ID, and LookupUnavailable (503) when the database cannot be
+    asked. Neither is logged: a parent's phone number must never land in
+    History > Not found, and an outage is not a "not found".
     """
     cleaned = re.sub(r"[^A-Za-z0-9]", "", student_id or "").upper()
     if not cleaned:
         raise ExtractError("Student ID cannot be empty.", status_code=400)
+
+    # Auto mode and the Drive inbox send every reading straight here with
+    # nobody looking, so this is the last place a name, an email address or
+    # a phone number read off the form can be stopped before it is saved,
+    # uploaded as NOTFOUND_<it> and listed for every member of staff.
+    shaped = as_student_id(cleaned)
+    if not shaped:
+        raise ExtractError(
+            "That does not look like a Student ID (letters then digits, e.g. "
+            "AADMIS310714). Nothing was saved.",
+            status_code=400,
+        )
+    cleaned = shaped
 
     result = ExtractResult(
         student_id=cleaned,
@@ -288,7 +417,10 @@ def _log_confirm_attempt(
     try:
         student = result.student or {}
         log_scan_attempt(
-            confirmed_student_id=result.student_id,
+            # The reading, not the match: matched_student_id already holds
+            # the match, and History's "read as X" (and any audit of a
+            # fuzzy save) needs what was actually read to compare against.
+            confirmed_student_id=result.ocr_student_id or result.student_id,
             found_in_db=result.found_in_db,
             matched_student_id=student.get("student_id"),
             student_name=student.get("student_name"),
@@ -369,9 +501,10 @@ def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
     candidates: list[tuple[str, float, str, str]] = []
 
     if label is not None:
+        label_tag = _label_tag(label)
         debug_log(
-            f"[DETECT] label={label.text!r} language={label.language} "
-            f"source={label.source} parsed={label.parsed_student_id!r}"
+            f"[DETECT] label={label_tag!r} language={label.language} "
+            f"source={label.source} parsed={loggable_reading(label.parsed_student_id)}"
         )
 
         # Keep noisy RapidOCR tokens too — better to show the user a rough
@@ -379,11 +512,11 @@ def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
         if label.parsed_student_id:
             token = re.sub(r"[^A-Za-z0-9]", "", label.parsed_student_id).upper()
             if looks_like_student_id(token):
-                candidates.append((token, 0.92, label.language, f"rapidocr:{label.text}"))
+                candidates.append((token, 0.92, label.language, f"rapidocr:{label_tag}"))
             elif len(token) >= 8 and token[:4].isalpha() and any(c.isdigit() for c in token):
-                debug_log(f"[DETECT] noisy OCR token kept: {token!r}")
+                debug_log(f"[DETECT] noisy OCR token kept: {loggable_reading(token)}")
                 candidates.append(
-                    (token, LABEL_LINE_CONFIDENCE, label.language, f"noisy:{label.text}")
+                    (token, LABEL_LINE_CONFIDENCE, label.language, f"noisy:{label_tag}")
                 )
 
         if label.source == "ocr":
@@ -394,8 +527,15 @@ def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
                     _read_id_from_crop(
                         crop,
                         label.language,
-                        label.text,
+                        label_tag,
                         allow_devanagari=devanagari_form,
+                        # The "label" is whichever line scored best, and an
+                        # email line can win. Only a crop beside the Student
+                        # ID line itself may leave for Vision.
+                        allow_vision=(
+                            _label_is_student_id_line(label)
+                            and _vision_may_read(crop, prepared, "label")
+                        ),
                     )
                 )
             except ValueError as exc:
@@ -409,9 +549,7 @@ def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
     # if that crop lands on a heading rather than the value line, every
     # recogniser runs over the wrong pixels and the page takes ~30s instead
     # of ~10s to reach an answer we already had.
-    have_clean = FAST_MODE and any(
-        looks_like_student_id(row[0]) for row in candidates
-    )
+    have_clean = FAST_MODE and any(_is_clean_read(row[0]) for row in candidates)
     if have_clean:
         debug_log("[FAST] clean read from the label crop - skipped layout crop")
 
@@ -419,12 +557,24 @@ def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
         try:
             crop = crop_value_roi(prepared, layout.student_id_roi)
             _save_debug_crop(crop, f"layout_{layout.language}")
+            # Only a close rule match has put this crop on the Student ID
+            # rule. A loose one lands it rows away: page-006 matched English
+            # at error 0.0064 (scale 1.08, where every other page matched at
+            # 0.85-0.86) and its crop held the parent's mobile number. A
+            # clear language call does not count - confidence measures how
+            # far the runner-up trails, not where the lines are.
+            if not field_located and vision_configured():
+                debug_log(
+                    f"[VISION] layout match too loose to vouch for its crop "
+                    f"(error={layout.error:.4f} > {LAYOUT_TRUST_ERROR}) - local recognisers only"
+                )
             candidates.extend(
                 _read_id_from_crop(
                     crop,
                     layout.language,
                     f"layout:{layout.language}",
                     allow_devanagari=devanagari_form,
+                    allow_vision=field_located and _vision_may_read(crop, prepared, "layout"),
                 )
             )
         except Exception as exc:  # noqa: BLE001 — a bad crop must not sink the page
@@ -448,6 +598,16 @@ def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
             try:
                 crop = crop_template_value(prepared, language)
                 _save_debug_crop(crop, f"template_{language}")
+                # Read on this machine only, never by Vision. A template box
+                # is a fixed page fraction, not a place found on this page.
+                # The other languages' boxes fall on other fields by
+                # construction - on an English form the Hindi and Marathi
+                # ones sit on the parent's email and phone lines - and even
+                # the matched form's own box drifts: on the scans in the log
+                # (scale 0.85-0.86) the English box starts 0.07-0.10 of the
+                # page below the located field, down among the parent's
+                # details. Where it does line up, the layout crop above has
+                # already been sent.
                 fallback_candidates.extend(
                     _read_id_from_crop(
                         crop,
@@ -462,12 +622,7 @@ def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
         best = _best_ocr_candidate(fallback_candidates)
 
     if best is None:
-        raise ExtractError(
-            "Could not read a valid Student ID (letters+digits, e.g. AADMIS310714). "
-            "OCR may have misread handwriting. Retake with Take photo on the FULL page, "
-            "close and sharp on the Student ID line.",
-            status_code=422,
-        )
+        raise ExtractError(NO_STUDENT_ID_MESSAGE, status_code=422)
 
     student_id, confidence, language, label_text = best
     # Report the language of the *form*, which the layout match knows, not
@@ -504,16 +659,12 @@ def _best_ocr_candidate(
 ) -> tuple[str, float, str, str] | None:
     """Pick the single most plausible raw OCR reading — strictly-formatted
     IDs (letters-then-digits) are preferred over noisy ones, then by
-    confidence. No database is touched here."""
-    ranked = [
-        row
-        for row in candidates
-        if looks_like_student_id(row[0])
-        or _is_noisy_id_like(row[0])
-        or _is_digit_anchored(row[0])
-    ]
-    if not ranked:
-        return None
+    confidence. No database is touched here.
+
+    Only a reading with the shape of a Student ID can win (see
+    id_shape.as_student_id). A crop that strays onto the parent's details
+    reads back as a name, an email address or a mobile number, and each of
+    those used to qualify here simply by ending in six digits."""
 
     # Score additively rather than ranking format above everything. Sorting
     # by (is_strict, confidence) let a 0.02-confidence reading that merely
@@ -522,13 +673,71 @@ def _best_ocr_candidate(
     def score(row: tuple[str, float, str, str]) -> float:
         return row[1] + (STRICT_FORMAT_BONUS if looks_like_student_id(row[0]) else 0.0)
 
-    ranked.sort(key=score, reverse=True)
+    ranked: list[tuple[float, tuple[str, float, str, str]]] = []
+    for row in candidates:
+        reading = as_student_id(row[0])
+        if reading:
+            ranked.append((score(row), (reading, row[1], row[2], row[3])))
+    if not ranked:
+        return None
+
+    ranked.sort(key=lambda item: item[0], reverse=True)
     debug_log(
         "[OCR] candidates="
-        + repr([(r[0], round(score(r), 3), r[3]) for r in ranked])
-        + f" -> best={ranked[0][0]!r}"
+        + repr([(row[0], round(points, 3), row[3]) for points, row in ranked])
+        + f" -> best={ranked[0][1][0]!r}"
     )
-    return ranked[0]
+    return ranked[0][1]
+
+
+def _is_clean_read(text: str) -> bool:
+    """A strict letters-then-digits reading that also has a Student ID's shape.
+
+    The fast paths stop looking once they have one of these. A name run into
+    a ten-digit mobile number passes the strict check alone, and stopping on
+    it would skip the readers that might have found the real ID.
+    """
+    return looks_like_student_id(text) and has_student_id_shape(text)
+
+
+def _label_is_student_id_line(label: LabelHit) -> bool:
+    """Whether the line the label path settled on is the Student ID line."""
+    _language, score = _score_label(label.text)
+    return score >= STUDENT_LABEL_SCORE or has_student_id_shape(label.parsed_student_id)
+
+
+def _label_tag(label: LabelHit) -> str:
+    """The label line's text as logs and label_text may carry it.
+
+    The label path settles on whichever line scored best, and that can be
+    the email line, or a name under the Grade fallback. label_text goes to
+    the browser and into the [OCR] candidates log line, so only a line that
+    names the Student ID, a bare ID-shaped line or the synthetic template
+    label is quoted; any other is described by its length.
+    """
+    text = label.text or ""
+    _language, score = _score_label(text)
+    if label.source == "template" or score >= STUDENT_LABEL_SCORE or as_student_id(text):
+        return text
+    return f"<not the Student ID line: {len(text)} chars>"
+
+
+def _vision_may_read(crop_bgr: np.ndarray, page_bgr: np.ndarray, tag: str) -> bool:
+    """Whether a crop is small enough to hold only the Student ID line.
+
+    Anything taller has swallowed neighbouring lines - names, an email, a
+    phone number - and those must not be sent to Google. The crop is still
+    read by the local recognisers either way.
+    """
+    page_height = max(int(page_bgr.shape[0]), 1)
+    share = crop_bgr.shape[0] / page_height
+    if share > VISION_MAX_CROP_HEIGHT:
+        debug_log(
+            f"[VISION] {tag} crop is {share:.3f} of the page height "
+            f"(over {VISION_MAX_CROP_HEIGHT}) - local recognisers only"
+        )
+        return False
+    return True
 
 
 def _is_noisy_id_like(token: str) -> bool:
@@ -560,16 +769,20 @@ def _read_id_from_crop(
     language: str,
     label_text: str,
     allow_devanagari: bool = False,
+    allow_vision: bool = False,
 ) -> list[tuple[str, float, str, str]]:
     """Run three independent recognizers on a crop and keep every plausible
     reading (strict + noisy) so DB fuzzy repair gets the best shot at
-    recovering the real Student ID from messy handwriting."""
+    recovering the real Student ID from messy handwriting.
+
+    allow_vision is the caller vouching that the crop holds the Student ID
+    field and nothing else; only then is it sent to Cloud Vision."""
     found: list[tuple[str, float, str, str]] = []
 
     # 0) Cloud Vision first when configured - it reads handwriting far
     # better than anything local, so a clean result here means the rest of
     # this function can be skipped entirely.
-    if vision_configured():
+    if allow_vision and vision_configured():
         for text, conf in recognize_with_vision(crop_bgr):
             score = min(conf + VISION_CONFIDENCE_BONUS, 0.99)
             if looks_like_student_id(text):
@@ -578,7 +791,7 @@ def _read_id_from_crop(
                 found.append(
                     (text, min(score, 0.70), language, f"crop-vision-noisy:{label_text}")
                 )
-        if FAST_MODE and any(looks_like_student_id(row[0]) for row in found):
+        if FAST_MODE and any(_is_clean_read(row[0]) for row in found):
             debug_log("[VISION] clean read - skipped local recognizers")
             return found
 
@@ -592,7 +805,11 @@ def _read_id_from_crop(
             parsed = parse_student_id_from_text(text) or re.sub(
                 r"[^A-Za-z0-9]", "", text
             ).upper()
-            debug_log(f"[RapidOCR-crop] text={text!r} parsed={parsed!r} conf={conf}")
+            # The crop may have strayed onto the parent's details.
+            debug_log(
+                f"[RapidOCR-crop] text={loggable_reading(text)} "
+                f"parsed={loggable_reading(parsed)} conf={conf}"
+            )
             if looks_like_student_id(parsed):
                 found.append((parsed, conf + 0.05, language, f"crop-rapid:{label_text}"))
             elif _is_noisy_id_like(parsed):
@@ -610,7 +827,7 @@ def _read_id_from_crop(
     # same crop; often catches characters the other two miss. It is also the
     # slowest, so in fast mode it only runs when nothing above produced a
     # cleanly-formatted ID and a second opinion would actually change things.
-    have_clean = any(looks_like_student_id(row[0]) for row in found)
+    have_clean = any(_is_clean_read(row[0]) for row in found)
     if not (FAST_MODE and have_clean):
         for text, conf in recognize_with_easyocr(crop_bgr):
             if looks_like_student_id(text):
@@ -630,7 +847,9 @@ def _read_id_from_crop(
     # Only worth the extra pass when the Latin readers came back with
     # nothing usable. Most IDs are written in Latin even on Hindi and
     # Marathi forms, and the Devanagari model is the slowest of the four.
-    if allow_devanagari and not found:
+    # "Usable" means shaped like an ID: junk the shape check will throw
+    # away later must not stand in for a reading here.
+    if allow_devanagari and not any(as_student_id(row[0]) for row in found):
         for text, conf in recognize_devanagari_id(crop_bgr):
             if looks_like_student_id(text):
                 found.append(
@@ -666,24 +885,10 @@ def _with_db_lookup(
     mark_scanned=False (the default, used during OCR preview) never writes
     scanned_at — only confirm_student_id() does that, once the user has
     reviewed/corrected the ID in the confirmation modal.
+
+    Raises LookupUnavailable when the database cannot be asked. Reporting
+    that as "not found" is what filed real students' forms as not found.
     """
-    from server.config import DB_HOST, DB_NAME, STUDENT_TABLE
-
-    result.db_debug = {
-        "ocr_student_id": result.student_id,
-        "db_host": DB_HOST,
-        "db_name": DB_NAME,
-        "table": STUDENT_TABLE,
-        "column": "student_id",
-        "sql": (
-            f"SELECT * FROM {STUDENT_TABLE} "
-            f"WHERE UPPER(TRIM(student_id)) = UPPER(%s) "
-            f"(exact, safe variant, or unique constrained repair)"
-        ),
-        "sql_param": result.student_id,
-        "lookup_result": "pending",
-    }
-
     debug_log(f"[OCR] Student ID found: {result.student_id!r} (confidence={result.confidence})")
     try:
         student = find_student_by_id(
@@ -692,32 +897,27 @@ def _with_db_lookup(
             school=school,
             location=location,
         )
-        if student is None:
-            debug_log(
-                f"[DB] No match in active_student_data.student_id for: {result.student_id!r}"
-            )
-            result.found_in_db = False
-            result.student = None
-            result.ocr_student_id = result.student_id
-            result.message = "student_id_not_found_in_db"
-            result.db_debug["lookup_result"] = "not_found"
-            return result
+    except DB_ERRORS as exc:
+        # The detail stays in the server log. pymysql's message names the
+        # database host, user and client address - nothing for a browser.
+        debug_log(
+            f"[DB] Lookup failed for {result.student_id!r}: {type(exc).__name__}: {exc}"
+        )
+        raise LookupUnavailable() from exc
 
-        result.ocr_student_id = result.student_id
-        result.student_id = student.get("student_id") or result.student_id
-        result.found_in_db = True
-        result.student = student
-        result.message = "ok"
-        result.db_debug["lookup_result"] = "found"
-        result.db_debug["matched_student_id"] = student.get("student_id")
-        result.db_debug["ocr_student_id"] = result.db_debug["sql_param"]
-        return result
-    except Exception as exc:  # noqa: BLE001 — keep OCR result even if DB fails
-        debug_log(f"[DB] Lookup failed for {result.student_id!r}: {exc}")
+    if student is None:
+        debug_log(
+            f"[DB] No match in active_student_data.student_id for: {result.student_id!r}"
+        )
         result.found_in_db = False
         result.student = None
-        result.db_error = str(exc)
-        result.message = "db_lookup_failed"
-        result.db_debug["lookup_result"] = "error"
-        result.db_debug["error"] = str(exc)
+        result.ocr_student_id = result.student_id
+        result.message = "student_id_not_found_in_db"
         return result
+
+    result.ocr_student_id = result.student_id
+    result.student_id = student.get("student_id") or result.student_id
+    result.found_in_db = True
+    result.student = student
+    result.message = "ok"
+    return result

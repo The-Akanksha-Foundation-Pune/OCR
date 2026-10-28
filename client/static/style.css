@@ -472,9 +472,11 @@ h1 {
   gap: 0.85rem;
 }
 
-@media (min-width: 520px) {
+/* Two tiles, the drop zone and Choose files: side by side once there is
+   room for both, the drop zone the wider. */
+@media (min-width: 640px) {
   .action-grid {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
   }
 }
 
@@ -526,20 +528,6 @@ h1 {
   gap: 0.15rem;
   flex: 1;
   min-width: 0;
-}
-
-.camera-btn {
-  border-color: #bfe0d1;
-  background: var(--accent-light);
-}
-
-.camera-btn:hover {
-  border-color: var(--accent);
-}
-
-.camera-btn .action-icon {
-  background: var(--accent);
-  color: #fff;
 }
 
 .action-title {
@@ -620,18 +608,6 @@ h1 {
     width: 100%;
     padding: 0.85rem 1rem;
   }
-}
-
-.file-name {
-  margin: 1rem 0 0;
-  padding: 0.6rem 0.85rem;
-  color: var(--accent-dark);
-  background: var(--accent-light);
-  border: 1px solid #bbf7d0;
-  border-radius: var(--radius-sm);
-  font-size: 0.9rem;
-  font-weight: 600;
-  word-break: break-word;
 }
 
 button {
@@ -873,24 +849,6 @@ button:disabled {
   margin-top: 1.1rem;
   padding-top: 1rem;
   border-top: 1px dashed var(--line);
-}
-
-.db-debug {
-  margin-top: 1.1rem;
-  padding: 0.95rem;
-  border: 1px solid #ddc99a;
-  border-radius: var(--radius-sm);
-  background: #fef3c7;
-}
-
-.db-debug-text {
-  margin: 0.4rem 0 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: Consolas, "Courier New", monospace;
-  font-size: 0.85rem;
-  line-height: 1.5;
-  color: #3a2f1a;
 }
 
 .tips {
@@ -1519,51 +1477,7 @@ button:disabled {
   box-shadow: none;
 }
 
-/* ---- automatic-check toggle ----------------------------------------- */
-
-.auto-toggle {
-  display: flex;
-  gap: 0.7rem;
-  align-items: flex-start;
-  margin: 1rem 0 1.2rem;
-  padding: 0.85rem 1rem;
-  border: 1.5px solid var(--line);
-  border-radius: var(--radius-md);
-  background: #ffffff;
-  cursor: pointer;
-  transition: border-color 0.15s var(--ease);
-}
-
-.auto-toggle:hover {
-  border-color: #cbd5e1;
-}
-
-.auto-toggle input {
-  margin-top: 0.12rem;
-  width: 1.1rem;
-  height: 1.1rem;
-  flex: 0 0 auto;
-  accent-color: var(--accent);
-}
-
-.auto-toggle-text {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-}
-
-.auto-toggle-title {
-  font-weight: 650;
-  font-size: 0.94rem;
-}
-
-.auto-toggle-hint {
-  font-size: 0.79rem;
-  line-height: 1.45;
-  color: var(--muted);
-}
-
-/* ---- live results while a batch runs -------------------------------- */
+/* ---- rows read from the Drive inbox --------------------------------- */
 
 .auto-results {
   list-style: none;
@@ -1644,7 +1558,8 @@ button:disabled {
   background: #f8fafc;
 }
 
-/* ---- review controls (kept for the manual review path) --------------- */
+/* ---- review controls (the manual review path, and typing in the ID of
+   an unreadable page on its own row) ------------------------------------ */
 
 .review-question {
   font-weight: 550;
@@ -2037,29 +1952,6 @@ tr.resolved {
   font-variant-numeric: tabular-nums;
 }
 
-/* Stop, while a scan from the helper runs - the one control the loader
-   leaves showing. Quiet rather than the blue primary, so it is not taken
-   for a "done" button and pressed by mistake. */
-.page-loader-stop {
-  width: auto;
-  margin: 0;
-  padding: 0.55rem 1.15rem;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #fff;
-  color: var(--ink);
-  font-size: 0.88rem;
-  font-weight: 600;
-  box-shadow: none;
-  cursor: pointer;
-}
-
-.page-loader-stop:hover:not(:disabled) {
-  border-color: var(--danger-line);
-  color: var(--danger-ink);
-  box-shadow: none;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .page-loader-bar.indeterminate .page-loader-fill {
     animation-duration: 3s;
@@ -2235,12 +2127,11 @@ body.is-busy {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- the Scanner card ---------------------------------------------------- */
+/* ---- the scan folder card ------------------------------------------------ */
 
-/* Scanning through the helper on this computer. Drawn like the school
+/* The folder the scanner's own software saves into. Drawn like the school
    picker above it - same border, label and radius - so the two read as
-   consecutive steps, with the scanners as hairline-separated rows in the
-   manner of the History table. */
+   consecutive steps. */
 .scanner {
   margin: 0 0 1.1rem;
   padding: 1rem 1.1rem 1.1rem;
@@ -2262,9 +2153,16 @@ body.is-busy {
   margin-bottom: 0;
 }
 
+.scanner-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
 /* Quiet, like the inbox Stop button - the global button rule would make it
    a full-width blue slab. */
-.scanner-recheck {
+.scanner-pill {
   flex-shrink: 0;
   width: auto;
   margin: 0;
@@ -2278,7 +2176,7 @@ body.is-busy {
   box-shadow: none;
 }
 
-.scanner-recheck:hover:not(:disabled) {
+.scanner-pill:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent-dark);
   box-shadow: none;
@@ -2310,24 +2208,23 @@ body.is-busy {
 .scanner-state.is-ok::before   { background: var(--ok); }
 .scanner-state.is-warn::before { background: var(--gold); }
 
-.scanner-state.is-checking {
-  color: var(--muted);
-}
-
-.scanner-state.is-checking::before {
-  animation: scanner-blink 1.2s ease-in-out infinite;
-}
-
-@keyframes scanner-blink {
-  50% { opacity: 0.25; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .scanner-state.is-checking::before { animation: none; }
-}
-
 .scanner-setup {
-  margin-top: 0.55rem;
+  margin-top: 0.75rem;
+}
+
+.scanner-setup summary {
+  width: fit-content;
+  margin-bottom: 0.45rem;
+  color: var(--accent-dark);
+  font-size: 0.84rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.scanner-setup summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
 .scanner-steps {
@@ -2356,7 +2253,6 @@ body.is-busy {
   overflow-wrap: anywhere;
 }
 
-.scanner-link,
 .scanner-fallback a {
   color: var(--accent-dark);
   font-weight: 600;
@@ -2364,7 +2260,6 @@ body.is-busy {
   text-underline-offset: 2px;
 }
 
-.scanner-link:hover,
 .scanner-fallback a:hover {
   color: var(--accent);
 }
@@ -2378,139 +2273,39 @@ body.is-busy {
   overflow-wrap: anywhere;
 }
 
-/* ---- one row per scanner ---- */
-
-.scanner-devices {
-  list-style: none;
-  margin: 0.85rem 0 0;
-  padding: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--panel);
-  overflow: hidden;
-}
-
-.scanner-device + .scanner-device {
-  border-top: 1px solid var(--line-soft);
-}
-
-.scanner-device-main {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.7rem 0.85rem;
-  cursor: pointer;
-  transition: background-color 0.15s var(--ease);
-  -webkit-tap-highlight-color: transparent;
-}
-
-.scanner-device.is-ready .scanner-device-main:hover {
-  background: #f8fafc;
-}
-
-.scanner-device.is-ready:has(input:checked) .scanner-device-main {
-  background: var(--accent-light);
-}
-
-.scanner-device.is-ready:has(input:checked) .scanner-device-name {
-  color: var(--accent-ink);
-}
-
-.scanner-device.is-unready .scanner-device-main {
-  cursor: default;
-}
-
-.scanner-device-main input {
-  margin: 0;
-  width: 1rem;
-  height: 1rem;
-  accent-color: var(--accent);
-}
-
-.scanner-device-text {
-  display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
-  min-width: 0;
-}
-
-.scanner-device-name {
-  font-size: 0.92rem;
-  font-weight: 650;
-  overflow-wrap: anywhere;
-}
-
-.scanner-device.is-unready .scanner-device-name {
-  color: var(--muted);
-}
-
-.scanner-device-sub {
-  font-size: 0.78rem;
-  color: var(--muted);
-}
-
-.scanner-chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.18rem 0.6rem;
-  border-radius: 999px;
-  font-size: 0.74rem;
-  font-weight: 650;
-  white-space: nowrap;
-}
-
-.scanner-chip.is-ready {
-  color: var(--ok-ink);
-  background: var(--ok-bg);
-  border: 1px solid var(--ok-line);
-}
-
-.scanner-chip.is-warn {
+/* A private window: the folder has to be connected again on each visit. */
+.scanner-note.is-warn {
   color: var(--gold-ink);
-  background: var(--gold-light);
-  border: 1px solid var(--gold-line);
 }
 
-/* Indented to line up under the scanner's name, not under the radio. */
-.scanner-device-fix {
-  margin: -0.25rem 0 0;
-  padding: 0 0.85rem 0.75rem calc(0.85rem + 1rem + 0.75rem);
-  font-size: 0.8rem;
+/* "N scans already in this folder - send them too, or only new ones?"
+   Amber, like the other questions the page waits on. */
+.scanner-ask {
+  margin: 0.85rem 0 0;
+  padding: 0.75rem 0.9rem 0.85rem;
+  border: 1px solid var(--gold-line);
+  border-radius: var(--radius-sm);
+  background: var(--gold-light);
+}
+
+.scanner-ask-text {
+  margin: 0;
+  color: var(--gold-ink);
+  font-size: 0.88rem;
+  font-weight: 600;
   line-height: 1.5;
-  color: var(--muted);
   overflow-wrap: anywhere;
 }
 
-/* ---- settings and the scan button ---- */
-
-.scanner-settings {
-  margin-top: 0.85rem;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.6rem;
-}
-
-.scanner-field {
+.scanner-ask-actions {
   display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  min-width: 0;
-}
-
-.scanner-field .school-label {
-  margin-bottom: 0;
-}
-
-.scanner-select {
-  padding: 0.55rem 2.1rem 0.55rem 0.75rem;
-  font-size: 0.88rem;
-  background-position: right 0.65rem center;
-  background-size: 0.95rem;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
 }
 
 .scanner-message {
-  margin: 0.85rem 0 0;
+  margin: 0.6rem 0 0;
   padding: 0.7rem 0.9rem;
   border: 1px solid var(--danger-line);
   border-radius: var(--radius-sm);
@@ -2521,11 +2316,9 @@ body.is-busy {
   overflow-wrap: anywhere;
 }
 
-/* The global button rule already makes this the full-width blue primary;
-   a long scanner name wraps rather than pushing the page sideways. */
-.scanner-go {
+/* The global button rule already makes this the full-width blue primary. */
+.scanner-primary {
   margin-top: 0.85rem;
-  overflow-wrap: anywhere;
 }
 
 .scanner-fallback {
@@ -2539,13 +2332,13 @@ body.is-busy {
 /* Where the fallback links land - clear of the menu button that floats at
    the top of the screen on phones. */
 .inbox,
-.action-grid {
+.add-files {
   scroll-margin-top: 1rem;
 }
 
 @media (max-width: 900px) {
   .inbox,
-  .action-grid {
+  .add-files {
     scroll-margin-top: 4.25rem;
   }
 }
@@ -2554,19 +2347,591 @@ body.is-busy {
   .scanner {
     padding: 0.9rem 0.9rem 1rem;
   }
+}
 
-  .scanner-settings {
-    grid-template-columns: 1fr;
+/* ---- Add scanned files ----------------------------------------------- */
+
+.add-files {
+  min-width: 0;
+}
+
+/* The bigger of the two tiles: the target for a stack of files dragged out
+   of the scan folder. */
+.drop-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 1.15rem 1rem;
+  border: 1.5px dashed var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+  justify-content: center;
+  min-width: 0;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.drop-zone:hover,
+.drop-zone.is-over {
+  border-color: var(--accent);
+  background: var(--accent-light);
+}
+
+.drop-zone-icon {
+  display: inline-flex;
+  color: var(--accent-dark);
+}
+
+.drop-zone-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.drop-zone-title {
+  font-weight: 700;
+  font-size: 0.98rem;
+  color: var(--ink);
+}
+
+.drop-zone-hint {
+  font-size: 0.84rem;
+  color: var(--muted);
+}
+
+.drop-zone:focus-visible,
+.action-btn:focus-visible,
+.scanner-pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Most tiles are labels for hidden inputs, so focus is drawn on the tile.
+   A rule of its own: a browser without :has() drops only this one. */
+.action-btn:has(+ input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.drop-message {
+  margin: 0.6rem 0 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--gold-ink);
+}
+
+/* ---- Scanned documents and OCR results ----------------------------------- */
+
+/* Two panels of their own under the scanner, so what was sent and what OCR
+   made of it read as the two separate stages they are. */
+.results-panel {
+  margin-top: 1.25rem;
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.section-title {
+  margin: 0;
+  font-size: 1.08rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.section-status {
+  margin: 0.45rem 0 0;
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.section-status.is-error {
+  color: var(--danger-ink);
+}
+
+.section-note {
+  margin: 0.45rem 0 0;
+  max-width: 68ch;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.section-note a {
+  color: var(--accent-dark);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Every file and page received, and how far it has got. */
+.received-list {
+  list-style: none;
+  margin: 0.8rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.received-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.35rem 0.75rem;
+  align-items: baseline;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--muted-light);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  font-size: 0.86rem;
+}
+
+.received-name {
+  min-width: 0;
+  font-weight: 600;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.received-time {
+  color: var(--muted-light);
+  font-variant-numeric: tabular-nums;
+}
+
+.received-state {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.received-detail {
+  grid-column: 1 / -1;
+  color: var(--danger-ink);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.received-row.is-reading { border-left-color: var(--accent); }
+.received-row.is-reading .received-state { color: var(--accent-dark); }
+.received-row.is-read { border-left-color: var(--ok); }
+.received-row.is-read .received-state { color: var(--ok-ink); }
+.received-row.is-failed,
+.received-row.is-error { border-left-color: var(--danger); background: var(--danger-bg); }
+.received-row.is-failed .received-state,
+.received-row.is-error .received-state { color: var(--danger-ink); }
+.received-row.is-retry { border-left-color: var(--gold); background: var(--gold-light); }
+.received-row.is-retry .received-state { color: var(--gold-ink); }
+
+.received-more {
+  padding: 0.3rem 0.75rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+/* One group per batch, B1, B2 ..., then Unsorted. */
+.ocr-batch {
+  margin-top: 1.15rem;
+}
+
+.ocr-batch-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.ocr-batch-title {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 1rem;
+  font-weight: 750;
+  color: var(--ink);
+}
+
+.ocr-batch-counts {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+/* A heading, not a code. */
+#ocr-unsorted .ocr-batch-title {
+  font-family: var(--font-display);
+}
+
+.ocr-docs {
+  list-style: none;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+/* A document, or an unsorted page. The left edge says how it stands. */
+.ocr-doc {
+  min-width: 0;
+  padding: 0.85rem 0.95rem 0.9rem;
+  border: 1.5px solid var(--line-soft);
+  border-left: 4px solid var(--muted-light);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  box-shadow: var(--shadow-sm);
+  animation: fade-up 0.3s var(--ease) both;
+}
+
+.ocr-doc.is-ready { border-left-color: var(--accent); }
+.ocr-doc.is-attention { border-left-color: var(--gold); background: #fffdf7; }
+.ocr-doc.is-failed { border-left-color: var(--danger); background: #fffafa; }
+.ocr-doc.is-confirmed { border-left-color: var(--gold); }
+.ocr-doc.is-uploaded { border-left-color: var(--ok); background: var(--ok-bg); }
+
+.ocr-doc-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  flex-wrap: wrap;
+}
+
+.ocr-doc-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.98rem;
+  font-weight: 750;
+  color: var(--ink);
+}
+
+.ocr-doc-parts {
+  min-width: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.ocr-pill {
+  margin-left: auto;
+  padding: 0.16rem 0.6rem;
+  border-radius: 999px;
+  background: var(--line-soft);
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.ocr-pill.is-ready { background: var(--accent-light); color: var(--accent-ink); }
+.ocr-pill.is-attention,
+.ocr-pill.is-confirmed { background: var(--gold-light); color: var(--gold-ink); }
+.ocr-pill.is-failed { background: var(--danger-bg); color: var(--danger-ink); }
+.ocr-pill.is-uploaded { background: #dcfce7; color: var(--ok-ink); }
+
+.ocr-doc-student {
+  margin: 0.4rem 0 0;
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+/* An ID typed over the one OCR matched, not looked up yet. */
+.ocr-doc-student.is-warn {
+  color: var(--gold-ink);
+}
+
+.ocr-doc-reason {
+  margin: 0.25rem 0 0;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  color: var(--gold-ink);
+  overflow-wrap: anywhere;
+}
+
+.ocr-doc.is-waiting .ocr-doc-reason {
+  color: var(--muted);
+}
+
+.ocr-thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.65rem;
+}
+
+.ocr-thumb {
+  display: flex;
+  flex-direction: column;
+  width: 5.5rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  overflow: hidden;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.ocr-thumb img {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 3rem;
+  background: var(--paper);
+}
+
+.ocr-thumb:hover,
+.ocr-thumb:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.ocr-thumb-label {
+  padding: 0.2rem 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.ocr-thumb.is-waiting {
+  justify-content: center;
+  min-height: 4.5rem;
+  padding: 0.35rem;
+  border-style: dashed;
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+.ocr-thumb.is-broken img {
+  display: none;
+}
+
+/* The scan itself, full width, for a page that could not be read. */
+.ocr-scans {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.ocr-scan {
+  margin: 0;
+  min-width: 0;
+}
+
+.ocr-scan-frame {
+  max-height: 80vh;
+  overflow: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--muted);
+  font-size: 0.84rem;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Focusable, so a zoomed scan can be scrolled with the arrow keys. */
+.ocr-scan-frame:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ocr-scan-image {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* Kept in place while it would not load, so Try again can ask for it. */
+.ocr-scan.is-broken .ocr-scan-image {
+  display: none;
+}
+
+.ocr-scan-trouble {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  flex-wrap: wrap;
+  margin: 0;
+  padding: 0.9rem;
+  color: var(--danger-ink);
+  font-weight: 600;
+}
+
+/* Zoomed: twice the width, scrolled within the frame. */
+.ocr-scan.is-zoomed .ocr-scan-image {
+  width: 200%;
+  max-width: none;
+}
+
+.ocr-scan-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.ocr-scan-caption {
+  min-width: 0;
+  margin-right: auto;
+  overflow-wrap: anywhere;
+}
+
+.ocr-scan-open,
+.ocr-link {
+  color: var(--accent-dark);
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* A field and its buttons; wraps onto more lines on a narrow screen. */
+.ocr-form-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.7rem;
+}
+
+.ocr-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.ocr-field-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ocr-input {
+  width: 13rem;
+  max-width: 100%;
+  padding: 0.5rem 0.65rem;
+  border: 1.5px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+.ocr-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.ocr-input:disabled {
+  background: var(--line-soft);
+}
+
+/* The global button rule makes every button a full-width slab. */
+.ocr-btn,
+.ocr-mini {
+  width: auto;
+  margin: 0;
+  box-shadow: none;
+}
+
+.ocr-btn {
+  padding: 0.55rem 0.95rem;
+  font-size: 0.86rem;
+}
+
+.ocr-btn.secondary,
+.ocr-mini {
+  border: 1.5px solid var(--line-strong);
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.ocr-btn.secondary:hover:not(:disabled),
+.ocr-mini:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-dark);
+  box-shadow: none;
+}
+
+.ocr-mini {
+  padding: 0.25rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.76rem;
+}
+
+.ocr-btn:focus-visible,
+.ocr-mini:focus-visible,
+.ocr-scan-open:focus-visible,
+.ocr-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ocr-doc-done {
+  margin: 0.6rem 0 0;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--ok-ink);
+  overflow-wrap: anywhere;
+}
+
+.ocr-doc-done.is-warn {
+  color: var(--gold-ink);
+}
+
+.ocr-doc-message {
+  margin: 0.55rem 0 0;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.ocr-doc-message.is-ok { color: var(--ok-ink); }
+.ocr-doc-message.is-error { color: var(--danger-ink); font-weight: 600; }
+
+@media (max-width: 560px) {
+  .received-row {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
-  /* The chip drops under the name rather than squeezing it to a sliver. */
-  .scanner-device-main {
-    grid-template-columns: auto minmax(0, 1fr);
-    row-gap: 0.4rem;
+  .received-time {
+    grid-row: 2;
   }
 
-  .scanner-chip {
-    grid-column: 2;
-    justify-self: start;
+  .ocr-doc {
+    padding: 0.75rem 0.75rem 0.8rem;
+  }
+
+  .ocr-pill {
+    margin-left: 0;
+  }
+
+  .ocr-form-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ocr-input {
+    width: 100%;
   }
 }

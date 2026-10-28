@@ -14,10 +14,11 @@ nowhere.
 
 from __future__ import annotations
 
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import jwt
 from flask import redirect, request, session
+from werkzeug.wrappers.response import Response
 
 from server.config import ALLOWED_EMAIL_DOMAIN, INTEGRATION_JWT_SECRET
 from server.services.access_control import is_authorized_staff
@@ -30,8 +31,30 @@ _ALGORITHMS = ["HS256"]
 # Tether signs with expiresIn: "10m"; allow a little clock drift between hosts.
 _LEEWAY_SECONDS = 30
 
+# What may stand unescaped in a path segment (RFC 3986 pchar, plus "/"),
+# leaving out "%" so a literal percent sign stays one.
+_PATH_SAFE = "/:@!$&'()*+,;="
 
-def _redirect_without_token():
+
+def _same_page_path() -> str:
+    """This page's own address, as a Location that can only stay on this host.
+
+    script_root, not just path. Mounted under a prefix (nginx sends
+    X-Forwarded-Prefix /ocr), request.path is the path *inside* the app, so
+    redirecting to it alone sends the browser out of the app to the host root.
+
+    request.path is already decoded, so /%09/evil.com arrives as "/\\t/evil.com".
+    Sent back like that, the tab is dropped on the way into the Location
+    header and the browser is left with "//evil.com" - another site, reached
+    without any valid token. Encoding the path again puts the tab back as
+    %09 (a backslash as %5C, and so on), and collapsing the leading slashes
+    means the result is always a path on this host.
+    """
+    target = (request.script_root or "") + request.path
+    return quote("/" + target.lstrip("/"), safe=_PATH_SAFE)
+
+
+def _redirect_without_token() -> Response:
     """Bounce to the same page with `token` removed from the query string.
 
     Worth the extra redirect: it keeps the token out of the address bar, the
@@ -39,11 +62,7 @@ def _redirect_without_token():
     """
     remaining = [(k, v) for k, v in request.args.items(multi=True) if k != "token"]
     query = urlencode(remaining)
-    # script_root, not just path. Mounted under a prefix (nginx sends
-    # X-Forwarded-Prefix /ocr), request.path is the path *inside* the app, so
-    # redirecting to it alone sends the browser out of the app to the host root.
-    target = (request.script_root or "") + request.path
-    return redirect(target + (f"?{query}" if query else ""))
+    return redirect(_same_page_path() + (f"?{query}" if query else ""))
 
 
 def _claims_from(token: str) -> dict | None:

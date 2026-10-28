@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 data/uploads/*
 !data/uploads/.gitkeep
+# The scan queue: scanned pages waiting for OCR or a person's confirm
+data/queue/
 .pytest_cache/
 .mypy_cache/
 *.log

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import time
+from urllib.parse import urlsplit
 
 from flask import Blueprint, redirect, render_template, request, session, url_for
+from werkzeug.wrappers.response import Response
 
 from server.config import ALLOWED_EMAIL_DOMAIN
 from server.services.access_control import is_authorized_staff
@@ -16,10 +18,26 @@ auth_bp = Blueprint("auth", __name__)
 
 
 def _safe_next_path(value: str | None) -> str | None:
-    """Only ever redirect to a path within this app — never an external URL."""
-    if value and value.startswith("/") and not value.startswith("//"):
-        return value
-    return None
+    """Only ever redirect to a path within this app — never an external URL.
+
+    Checked the way a browser will read it, not just as written. A browser
+    (and Werkzeug, writing the Location header) drops tab, CR and LF from a
+    URL, and reads a backslash as a slash - so "/\\t/evil.com" or "/\\evil.com"
+    pass a plain "starts with one slash" test and still land on "//evil.com",
+    another site. Anything with a control character or a backslash is
+    refused outright rather than cleaned up: no real page of this app has one.
+    """
+    if not value:
+        return None
+    if "\\" in value or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+        return None
+    if not value.startswith("/") or value.startswith("//"):
+        return None
+    # Belt and braces: whatever is left must parse as a bare path on this host.
+    parts = urlsplit(value)
+    if parts.scheme or parts.netloc or not parts.path.startswith("/") or parts.path.startswith("//"):
+        return None
+    return value
 
 
 @auth_bp.get("/login")
@@ -47,7 +65,7 @@ def google_login():
 
 
 @auth_bp.get("/login/google/callback")
-def google_callback():
+def google_callback() -> Response:
     try:
         token = oauth.google.authorize_access_token()
     except Exception as exc:  # noqa: BLE001 — any OAuth failure lands on /login
@@ -80,7 +98,9 @@ def google_callback():
         debug_log(f"[AUTH] rejected — not Developer/School Administration: {email!r}")
         return redirect(url_for("auth.login", error="not_authorized"))
 
-    next_path = session.pop("post_login_next", None)
+    # Checked again on the way out: the session may hold a value stored
+    # before this check was as strict as it is now.
+    next_path = _safe_next_path(session.pop("post_login_next", None))
     session.clear()
     session.permanent = True
     session["user"] = {
@@ -98,7 +118,14 @@ def google_callback():
     }
     debug_log(f"[AUTH] signed in: {email!r}")
 
-    return redirect(next_path or url_for("ocr.index"))
+    if not next_path:
+        return redirect(url_for("ocr.index"))
+    # next is a path inside the app (the login gate stores request.path), so
+    # under the /ocr mount it needs the mount put back in front: "/" alone
+    # would land on the host's own home page, another app. The leading
+    # slashes are collapsed, as in sso._same_page_path, so whatever the
+    # prefix the result can only be a path on this host.
+    return redirect("/" + (request.script_root + next_path).lstrip("/"))
 
 
 @auth_bp.get("/logout")

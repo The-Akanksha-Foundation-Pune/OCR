@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 
 from server.services import batch_store, drive_inbox
 from server.services.auth import current_user, require_login
@@ -23,9 +23,28 @@ from server.services.student_lookup import school_progress
 inbox_bp = Blueprint("inbox", __name__)
 inbox_bp.before_request(require_login)
 
-# The watcher stamps a heartbeat every pass (every few seconds). Older than
-# this and it is not running, and pages will sit unread - say so up front.
+# The watcher stamps a heartbeat every few seconds, from a thread of its own
+# so that a long pass does not go quiet. Older than this and it is not
+# running, and pages will sit unread - say so up front.
 WATCHER_STALE_AFTER = timedelta(seconds=45)
+
+DRIVE_UNREACHABLE = "Could not reach Google Drive just now. Try again in a minute."
+
+# What a Stop with pages still waiting actually does, for the confirmation.
+# The watcher matches each page to the batch that was open when it reached
+# Drive (inbox_watcher.batch_for_page): the waiting pages are still read for
+# this school, so scanning them again would only log them twice. A sheet
+# that lands after Stop is set aside as unread if nothing has been started by
+# then; if the next school has been, it is read for that school, or - when it
+# lands within inbox_watcher.LATE_TAIL of this Stop - for this one if only
+# this school has the student (inbox_watcher.tail_batch_for).
+STOP_PENDING_MESSAGE = (
+    "Stop now anyway? Pages already in your Drive folder are still read for "
+    "this school, so there is no need to scan them again. A sheet that "
+    "reaches Drive after you stop is listed as unread if no school has been "
+    "started by then. If one has, it is read for that school, or for this "
+    "one if its student is found here and not there."
+)
 
 
 def _me() -> str:
@@ -47,14 +66,24 @@ def _pending_in_inbox(folder_id: str | None) -> int | None:
     if not folder_id:
         return None
     try:
-        return len(drive_inbox.list_new_pages(folder_id))
+        waiting = drive_inbox.list_new_pages(folder_id)
     except drive_inbox.DriveInboxError as exc:
         debug_log(f"[INBOX] pending count failed: {exc}")
         return None
+    # A file whose pages are all recorded but which could not be renamed (a
+    # folder shared as Viewer), or one the watcher has given up on, keeps
+    # its own name but is not waiting for anything. Counted, it held Stop at
+    # "pages still waiting" for ever.
+    try:
+        settled = batch_store.settled_file_ids([entry["id"] for entry in waiting])
+    except Exception as exc:  # noqa: BLE001 - only a count; Drive's number will do
+        debug_log(f"[INBOX] could not check which pages are settled: {exc}")
+        settled = set()
+    return sum(1 for entry in waiting if entry["id"] not in settled)
 
 
 @inbox_bp.get("/api/inbox/status")
-def inbox_status():
+def inbox_status() -> tuple[Response, int]:
     """Everything the page needs to draw the panel in one call."""
     ok, why = drive_inbox.configured()
     if not ok:
@@ -84,7 +113,10 @@ def inbox_status():
     try:
         inbox = drive_inbox.find_inbox(email)
     except drive_inbox.DriveInboxError as exc:
-        payload["inbox"] = {"found": False, "error": str(exc)}
+        # Drive's own message stays in the server log; the page gets a
+        # sentence a person can act on.
+        debug_log(f"[INBOX] status: could not look up the inbox: {exc}")
+        payload["inbox"] = {"found": False, "error": DRIVE_UNREACHABLE}
         return jsonify(payload), 200
     if inbox:
         payload["inbox"] = {"found": True, "folder_id": inbox["id"], "shared_at": inbox["shared_at"]}
@@ -96,7 +128,7 @@ def inbox_status():
 
 
 @inbox_bp.post("/api/inbox/start")
-def inbox_start():
+def inbox_start() -> tuple[Response, int]:
     body = request.get_json(silent=True) or {}
     school = str(body.get("school") or "").strip()
     location = str(body.get("location") or "").strip()
@@ -105,7 +137,8 @@ def inbox_start():
     try:
         inbox = drive_inbox.find_inbox(email)
     except drive_inbox.DriveInboxError as exc:
-        return jsonify({"error": f"Could not reach Google Drive: {exc}"}), 502
+        debug_log(f"[INBOX] start: could not look up the inbox: {exc}")
+        return jsonify({"error": DRIVE_UNREACHABLE}), 502
     if not inbox:
         return jsonify({
             "error": (
@@ -128,14 +161,16 @@ def inbox_start():
 
 
 @inbox_bp.post("/api/inbox/stop")
-def inbox_stop():
+def inbox_stop() -> tuple[Response, int]:
     batch = batch_store.open_batch_for(_me())
     if not batch:
         return jsonify({"closed": False, "batch": None}), 200
 
     # The panel asks for a confirmation when there are files still in the
-    # inbox: closing now would leave those pages unread and unattributed to
-    # any school. Force=true is the confirmed-close path.
+    # inbox. Pages already there when the batch closes are still read for
+    # this batch's school - the watcher goes by when each page reached Drive
+    # - but one that arrives after Stop may not be (STOP_PENDING_MESSAGE); the
+    # person should know that before closing. Force=true is the confirmed-close path.
     body = request.get_json(silent=True) or {}
     if not body.get("force"):
         pending = _pending_in_inbox(batch.get("folder_id")) or 0
@@ -145,6 +180,7 @@ def inbox_stop():
                 "batch": batch,
                 "pending": pending,
                 "reason": "pending",
+                "message": STOP_PENDING_MESSAGE,
             }), 409
 
     batch_store.close_batch(int(batch["id"]))

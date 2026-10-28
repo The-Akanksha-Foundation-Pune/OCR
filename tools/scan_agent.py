@@ -54,12 +54,15 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Callable
+from email.message import Message
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -123,6 +126,41 @@ ALLOWED_HOSTS = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
 MAX_BODY_BYTES = 64 * 1024
 
 _PAGE_FILE = re.compile(r"^page-(\d+)\.jpg$")
+
+# Every scan writes into a fresh folder of its own in the temp folder. The
+# start-up sweep only removes one whose name is what mkdtemp gives a job and
+# that holds nothing but what the helper and its engines write, so another
+# program's folder is never touched.
+JOB_FOLDER_PREFIX = "scan-agent-"
+_JOB_FOLDER = re.compile(r"^scan-agent-[a-z0-9_]{8}$")
+_JOB_FILE = re.compile(r"^(?:scan\.log|done\.txt|failed\.txt|page-\d+\.jpg)(?:\.part)?$")
+_STAGING_FOLDER = re.compile(r"^\.staging-[a-z0-9_]{8}$")
+# What Finder and Explorer add to a folder someone opens to look at the
+# pages. A job folder holding one is still the helper's to remove.
+_SYSTEM_FILES = frozenset({".ds_store", "thumbs.db", "desktop.ini"})
+# A Flatpak NAPS2 has a /tmp of its own, so scan_naps2.py stages its pages
+# in <app>/cache/akanksha-scan under ~/.var/app instead - outside the job
+# folder, so a scan killed part-way leaves them where the job-folder sweep
+# never looks.
+_FLATPAK_STAGING = "*/cache/akanksha-scan/staging-*"
+_FLATPAK_STAGING_FOLDER = re.compile(r"^staging-[a-z0-9_]{8}$")
+
+# Every browser's User-Agent starts with this, and so does the one Windows
+# PowerShell's curl (Invoke-WebRequest) sends, which names PowerShell too.
+_BROWSER_AGENT = re.compile(r"^Mozilla/", re.IGNORECASE)
+_POWERSHELL_AGENT = re.compile(r"PowerShell/", re.IGNORECASE)
+
+# Console events Windows sends a console program (wincon.h). Ctrl+Break,
+# closing the window, signing out and shutting down all end the process as
+# soon as the handlers return, without main()'s clean-up ever running.
+CTRL_C_EVENT = 0
+CTRL_BREAK_EVENT = 1
+CTRL_CLOSE_EVENT = 2
+CTRL_LOGOFF_EVENT = 5
+CTRL_SHUTDOWN_EVENT = 6
+_CONSOLE_ENDINGS = frozenset(
+    {CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT}
+)
 
 
 class Server(ThreadingHTTPServer):
@@ -312,7 +350,7 @@ def _start_scan(device: dict, options: dict) -> dict:
     NAPS2 or PowerShell and everything they started, not just the first
     process.
     """
-    folder = Path(tempfile.mkdtemp(prefix="scan-agent-"))
+    folder = Path(tempfile.mkdtemp(prefix=JOB_FOLDER_PREFIX))
     try:
         command = _scan_command(device, folder, options)
     except Refused:
@@ -329,7 +367,9 @@ def _start_scan(device: dict, options: dict) -> dict:
         if any(job["process"].poll() is None for job in _jobs.values()):
             shutil.rmtree(folder, ignore_errors=True)
             raise Refused(409, "A scan is already running on this computer.")
-        log = open(folder / "scan.log", "wb")
+        # Not a with-block: the scan process writes into this file for as long
+        # as it runs, and the job's clean-up closes it.
+        log = open(folder / "scan.log", "wb")  # noqa: SIM115
         try:
             process = subprocess.Popen(
                 command,
@@ -377,12 +417,144 @@ def _discard(job: dict) -> None:
         time.sleep(0.5)
 
 
+def _discard_all() -> None:
+    """Stop every scan and delete every job folder the helper holds."""
+    with _jobs_lock:
+        jobs = list(_jobs.values())
+        _jobs.clear()
+    for job in jobs:
+        _discard(job)
+
+
+def _own_folder(folder: Path) -> bool:
+    """Whether a path is a real folder (not a link) that belongs to this user.
+
+    Raises:
+        OSError: When the path cannot be looked at.
+    """
+    info = folder.lstat()
+    if not stat.S_ISDIR(info.st_mode):
+        return False
+    # %TEMP% is the user's own on Windows, but /tmp on Linux is shared.
+    return not hasattr(os, "getuid") or info.st_uid == os.getuid()
+
+
+def _left_by_helper(folder: Path) -> bool:
+    """Whether a folder is one of the helper's job folders and nothing else.
+
+    Its name must be one mkdtemp gives a job, it must be a real folder (not
+    a link to somewhere else) that belongs to this user, and everything in
+    it must be something the helper or an engine writes there - or a file
+    Finder or Explorer adds to any folder someone opens.
+    """
+    if not _JOB_FOLDER.match(folder.name):
+        return False
+    try:
+        if not _own_folder(folder):
+            return False
+        for entry in folder.iterdir():
+            if entry.is_dir():
+                if not _STAGING_FOLDER.match(entry.name):
+                    return False
+            elif not _JOB_FILE.match(entry.name) and entry.name.lower() not in _SYSTEM_FILES:
+                return False
+    except OSError:
+        return False
+    return True
+
+
+def _left_by_naps2(folder: Path) -> bool:
+    """Whether a folder is one scan_naps2.py staged a Flatpak NAPS2's pages in.
+
+    Its name must be one mkdtemp gives a staging folder, it must be a real
+    folder that belongs to this user, and it may hold only plain files. The
+    akanksha-scan folder it sits in is scan_naps2.py's alone, and NAPS2
+    names the pages itself, so the files are not checked by name.
+    """
+    if not _FLATPAK_STAGING_FOLDER.match(folder.name):
+        return False
+    try:
+        if not _own_folder(folder):
+            return False
+        return all(stat.S_ISREG(entry.lstat().st_mode) for entry in folder.iterdir())
+    except OSError:
+        return False
+
+
+def _remove_left_behind(found: list[Path], left_behind: Callable[[Path], bool]) -> int:
+    """Delete each folder left_behind() says is safe to; return how many went."""
+    removed = 0
+    for folder in found:
+        if not left_behind(folder):
+            continue
+        shutil.rmtree(folder, ignore_errors=True)
+        if not folder.exists():
+            removed += 1
+    return removed
+
+
+def _sweep_old_jobs(temp_dir: Path | None = None) -> int:
+    """Delete the job folders an earlier run of the helper left behind.
+
+    A helper that ends without its clean-up - a crash, a power cut, or on
+    Windows a window closed before the console handler could finish - leaves
+    the scanned pages it was holding in the temp folder, and the next run
+    only knows its own jobs. Call this only once this copy holds the port:
+    then no other helper can still be using one of these folders.
+
+    Args:
+        temp_dir: Where to look. The system temp folder, where every job
+            folder is made, when not given.
+
+    Returns:
+        How many folders were removed.
+    """
+    base = temp_dir if temp_dir is not None else Path(tempfile.gettempdir())
+    try:
+        found = sorted(base.glob(JOB_FOLDER_PREFIX + "*"))
+    except OSError:
+        return 0
+    return _remove_left_behind(found, _left_by_helper)
+
+
+def _sweep_flatpak_staging(apps_dir: Path | None = None) -> int:
+    """Delete the pages a Flatpak NAPS2 scan left staged in its own folder.
+
+    scan_naps2.py clears its staging folder when it ends, but not when it
+    is killed: stopping a scan sends it SIGTERM, which ends a Python script
+    before its clean-up runs, and a power cut gives no warning at all. The
+    pages then wait in the home folder, outside the job folder the other
+    sweep removes. The same rule makes this safe: call it only once this
+    copy holds the port, when no other helper's scan can be writing there.
+
+    Args:
+        apps_dir: Where Flatpak apps keep their own files. ~/.var/app when
+            not given; nothing is there on Windows or a Mac.
+
+    Returns:
+        How many folders were removed.
+    """
+    if apps_dir is None:
+        try:
+            apps_dir = Path.home() / ".var" / "app"
+        except (RuntimeError, KeyError):  # no home folder to be found
+            return 0
+    try:
+        found = sorted(apps_dir.glob(_FLATPAK_STAGING))
+    except OSError:
+        return 0
+    return _remove_left_behind(found, _left_by_naps2)
+
+
 def _enforce_timeout(job: dict) -> None:
-    if job["error"] is None and job["process"].poll() is None:
-        if time.monotonic() - job["started"] > SCAN_TIMEOUT:
-            job["error"] = scanner_devices.timeout_message(SCAN_TIMEOUT)
-            print(f"  scan timed out: job={job['id']}", flush=True)
-            _stop(job)
+    if (
+        job["error"] is None
+        and job["process"].poll() is None
+        and time.monotonic() - job["started"] > SCAN_TIMEOUT
+    ):
+        job["error"] = scanner_devices.timeout_message(SCAN_TIMEOUT)
+        print(f"  scan timed out: job={job['id']}", flush=True)
+        _stop(job)
 
 
 def _job_state(job: dict) -> tuple[bool, str | None]:
@@ -456,8 +628,7 @@ def _last_words(job: dict) -> str:
     # CategoryInfo / FullyQualifiedErrorId noise - keep the message.
     for ln in reversed(lines):
         noise = (
-            ln.startswith("+")
-            or ln.startswith("At ")
+            ln.startswith(("+", "At "))
             or "CategoryInfo" in ln
             or "FullyQualifiedErrorId" in ln
         )
@@ -508,6 +679,29 @@ def _health() -> dict:
 
 
 # ---- HTTP --------------------------------------------------------------
+
+
+def _checked_by_hand(headers: Message) -> bool:
+    """Whether a request comes from a tool on this computer, not a browser.
+
+    curl, PowerShell or a script sends neither Origin nor Sec-Fetch-Site,
+    and a User-Agent of its own. A browser sends Sec-Fetch-Site (Chrome from
+    76, Firefox from 90, Safari from 16.4) and a User-Agent that starts
+    "Mozilla/", and a page can neither drop the one nor change the other on
+    a request that goes without an Origin - so another site's <img> or
+    <script> cannot pass for a tool. A tool could name an allowed Origin
+    just as easily, so believing it gives nothing away.
+
+    Args:
+        headers: The request's headers.
+
+    Returns:
+        True for a request no browser could have sent from a web page.
+    """
+    if headers.get("Origin") is not None or headers.get("Sec-Fetch-Site") is not None:
+        return False
+    agent = headers.get("User-Agent") or ""
+    return not _BROWSER_AGENT.match(agent) or bool(_POWERSHELL_AGENT.search(agent))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -607,7 +801,7 @@ class Handler(BaseHTTPRequestHandler):
             print(f"  error: {exc!r}", flush=True)
             self._json({"error": f"The scan helper hit an error: {exc}"}, 500)
 
-    def do_OPTIONS(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler naming
+    def do_OPTIONS(self) -> None:
         self.send_response(204)
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
@@ -618,10 +812,10 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
         print(f"  {self.address_string()} {fmt % args}", flush=True)
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         self._handle(self._get)
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         self._handle(self._post)
 
     # ---- routes ---------------------------------------------------------
@@ -633,14 +827,24 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(_health())
 
         if route.path == "/devices":
-            refresh = (query.get("refresh") or [""])[0].lower() in ("1", "true", "yes")
+            # A check starts NAPS2 or PowerShell for every driver, so only
+            # the app's own page - its fetches always name it in Origin - or
+            # someone checking by hand with curl may ask for one. A browser
+            # request with no Origin is someone typing the address, or
+            # another site's <img> or <script>, which can send one after
+            # another and never says where it came from. Those get the last
+            # answer, however old, and start a check only if there is none.
+            may_check = self.headers.get("Origin") in ALLOWED_ORIGINS or _checked_by_hand(
+                self.headers
+            )
             cached = scanner_devices.cached_devices()
-            if cached is not None and _running_job() is not None:
+            if cached is not None and (not may_check or _running_job() is not None):
                 # Listing asks every driver for its scanners, which can
                 # disturb one that is mid-stack. The last answer will do
                 # until the scan is over.
                 return self._json(cached)
-            return self._json(scanner_devices.get_devices(refresh=refresh))
+            refresh = (query.get("refresh") or [""])[0].lower() in ("1", "true", "yes")
+            return self._json(scanner_devices.get_devices(refresh=refresh and may_check))
 
         if route.path == "/pages":
             job_id = (query.get("job") or [""])[0]
@@ -735,12 +939,73 @@ def _exit_cleanly_on_kill() -> None:
     A scan has its own process group, so it outlives a helper that simply
     dies - the scanner keeps feeding into a folder nobody reads. Routed
     through KeyboardInterrupt, both run the clean-up in main(). A signal
-    someone chose to ignore (nohup ignores SIGHUP) is left ignored.
+    someone chose to ignore (nohup ignores SIGHUP) is left ignored. A closed
+    window on Windows never gets this far - _clean_up_on_console_close()
+    covers that.
     """
     for name in ("SIGTERM", "SIGHUP"):
         number = getattr(signal, name, None)
         if number is not None and signal.getsignal(number) == signal.SIG_DFL:
             signal.signal(number, _stop_on_signal)
+
+
+# The handler Windows holds a pointer to. Kept here so ctypes never frees it
+# while Windows can still call it.
+_console_handler: object | None = None
+
+
+def _on_console_event(event: int) -> bool:
+    """Clear away every job before Windows ends the helper for this event.
+
+    Windows calls this on a thread of its own and ends the process once the
+    handlers return (or after about 5 seconds), so the clean-up has to run
+    here rather than in main(). Ctrl+C is left alone: Python turns it into
+    KeyboardInterrupt and main() cleans up as usual.
+
+    Args:
+        event: The CTRL_*_EVENT code Windows passed.
+
+    Returns:
+        False, so the event still goes on to the handlers after this one and
+        Windows ends the process just as it did before.
+    """
+    if event in _CONSOLE_ENDINGS:
+        _discard_all()
+    return False
+
+
+def _clean_up_on_console_close() -> bool:
+    """On Windows, clear away the jobs when the helper's window is closed.
+
+    Closing the window is how people stop the helper, and Python only hears
+    of it as SIGBREAK from the C runtime's console handler - by then it is
+    too late, as Windows ends the process the moment that handler returns.
+    A handler registered after it is called before it, on a thread of its
+    own, and has a few seconds to stop the scan and delete the pages.
+
+    Returns:
+        True when the handler is in place. Only Windows has one to set;
+        elsewhere SIGTERM and SIGHUP already cover a closed terminal.
+    """
+    global _console_handler
+    try:
+        import ctypes
+    except ImportError:
+        return False
+    windll = getattr(ctypes, "windll", None)
+    handler_type = getattr(ctypes, "WINFUNCTYPE", None)
+    if windll is None or handler_type is None:
+        return False
+    # BOOL WINAPI HandlerRoutine(DWORD dwCtrlType)
+    handler = handler_type(ctypes.c_long, ctypes.c_ulong)(_on_console_event)
+    try:
+        registered = windll.kernel32.SetConsoleCtrlHandler(handler, True)
+    except (AttributeError, OSError):
+        return False
+    if not registered:
+        return False
+    _console_handler = handler
+    return True
 
 
 def _parse_args() -> argparse.Namespace:
@@ -774,6 +1039,10 @@ def main() -> None:
             f"Port {PORT} is already in use - the scan helper is probably "
             "already running in another window. Use that one."
         )
+    # Only now that this copy holds the port can no other helper be using a
+    # job folder, so any still in the temp folder - someone's scanned pages
+    # - were left by one that is gone.
+    swept = _sweep_old_jobs() + _sweep_flatpak_staging()
 
     health = _health()
     print(f"Akanksha scan helper (version {VERSION})", flush=True)
@@ -787,9 +1056,16 @@ def main() -> None:
         print(f"  WIA script    {SCAN_PS1}  ({'found' if SCAN_PS1.exists() else 'MISSING'})", flush=True)
     print(f"  accepts       {', '.join(sorted(ALLOWED_ORIGINS))}", flush=True)
     print(f"  stops a scan  after {SCAN_TIMEOUT:g} seconds", flush=True)
+    if swept:
+        print(
+            f"  cleared       {swept} scan folder{'' if swept == 1 else 's'} "
+            "an earlier run left behind",
+            flush=True,
+        )
     print("\n  Leave this window open while scanning. Ctrl+C to stop.\n", flush=True)
 
     _exit_cleanly_on_kill()
+    _clean_up_on_console_close()
     threading.Thread(target=_watch_jobs, daemon=True).start()
     threading.Thread(target=_describe_devices, daemon=True).start()
     try:
@@ -797,11 +1073,7 @@ def main() -> None:
     finally:
         # A scan has its own process group, so Ctrl+C here does not reach
         # it - stop it explicitly rather than leave the scanner running.
-        with _jobs_lock:
-            jobs = list(_jobs.values())
-            _jobs.clear()
-        for job in jobs:
-            _discard(job)
+        _discard_all()
 
 
 if __name__ == "__main__":

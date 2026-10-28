@@ -10,8 +10,63 @@ load_dotenv(BASE_DIR / ".env")
 
 DATA_DIR = BASE_DIR / "data"
 UPLOAD_FOLDER = DATA_DIR / "uploads"
+
+
+def _env_path(name: str, default: Path) -> Path:
+    """A folder from .env, relative paths taken from the repository root."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    path = Path(raw).expanduser()
+    return path if path.is_absolute() else BASE_DIR / path
+
+
+def _env_flag(name: str) -> bool | None:
+    """A yes/no setting from .env, or None when it is not set at all."""
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return None
+    return raw in ("1", "true", "yes")
+
+
+# The scan queue (services/scan_queue.py). Scanning only stores pages here;
+# the OCR worker reads them in the background and a person confirms each
+# document before anything reaches the database or Drive. Plain folders and
+# JSON, no database tables, so a page waiting for OCR survives a restart.
+QUEUE_DIR = _env_path("QUEUE_DIR", DATA_DIR / "queue")
+# Where the OCR worker runs. In development a thread inside the web app
+# reads the queue; unset, that follows Flask's debug mode (on under run.py).
+# In production gunicorn starts several workers, so the inbox watcher reads
+# the queue instead and this stays off.
+OCR_WORKER_IN_PROCESS = _env_flag("OCR_WORKER_IN_PROCESS")
+# A page whose reader stopped answering (a crash, a killed process) is
+# handed to another reader after this long.
+QUEUE_CLAIM_STALE_SECONDS = 10 * 60
+# Tries at reading one page before it is marked failed and left to a person.
+QUEUE_MAX_ATTEMPTS = 3
+# How large a stored page may be. A 600 dpi colour scan is ~100 MB as a
+# three-channel array; nothing in the reader needs more than 300 dpi, and a
+# greyscale page that size is a few megabytes.
+PAGE_MAX_DPI = 300
+PAGE_MAX_LONG_SIDE = 3600
+# PDF pages are rendered at this resolution, the one the reader was tuned on.
+PAGE_PDF_DPI = 200
+# The reader itself works on at most this many pixels down the long side
+# (about 200 dpi on A4): the layout match and the crops are all fractions of
+# the page, and the full-page passes cost in proportion to its area.
+OCR_MAX_LONG_SIDE = 2400
+# Where the handwritten batch code ("B1-12") is written, as fractions
+# (x0, y0, x1, y1) of the upright page: the top-right corner, where the forms
+# carry their circled serial, and the top-left, where some prints put it.
+BATCH_CODE_REGION = (0.72, 0.0, 1.0, 0.09)
+BATCH_CODE_FALLBACK_REGION = (0.0, 0.0, 0.30, 0.09)
+# Confirmed and uploaded documents stay on the scan page for this long, so
+# the person can see what went to Drive; History keeps the full record.
+DONE_DOCUMENTS_HOURS = int(os.getenv("DONE_DOCUMENTS_HOURS") or "72")
 MAX_CONTENT_LENGTH = 100 * 1024 * 1024  # 100 MB — a full ADF stack of scans
-ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf"}
+# TIFF because macOS Image Capture and many scanners' own software save it
+# by default; a multi-page TIFF is read page by page, like a PDF.
+ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf", ".tif", ".tiff"}
 
 # MySQL RDS (AFDW) — from .env
 DB_HOST = os.getenv("DB_HOST", "")
@@ -41,6 +96,15 @@ ALLOWED_DESIGNATIONS = _csv_set(
 
 # Flask session signing — required for the login cookie to work
 SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "")
+# The session cookie is marked Secure whenever the request itself came over
+# https (behind nginx that is X-Forwarded-Proto). Set this to 1 to insist on
+# it regardless - only on a host that is never reached over plain http, or
+# nobody there could stay signed in.
+SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "0").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 # Google OAuth2 sign-in (Google Cloud Console > APIs & Services > Credentials)
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
@@ -144,14 +208,6 @@ LAYOUT_TRUST_ERROR = 0.0025
 MIN_REPAIR_SCORE = 0.80
 MIN_REPAIR_MARGIN = 0.08
 MAX_REPAIR_LENGTH_DELTA = 1
-
-# Auto mode saves exact matches without asking. A repaired match is only a
-# best guess, so it waits for a human unless this is turned on.
-AUTO_COMMIT_REPAIRED = os.getenv("AUTO_COMMIT_REPAIRED", "0").strip().lower() in (
-    "1",
-    "true",
-    "yes",
-)
 
 # Student ID post-process: keep common ID characters
 STUDENT_ID_PATTERN = r"[^A-Za-z0-9\-_/]"

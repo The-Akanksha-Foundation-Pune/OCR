@@ -1,13 +1,22 @@
 """Save scanned uploads to the signed-in user's Google Drive OCR folder.
 
 Required layout:
-  My Drive / OCR / YYYY-MM-DD / StudentName_STUDENTID.jpg
+  My Drive / OCR / YYYY-MM-DD / StudentName_STUDENTID.jpg     (one page, /api/confirm)
+  My Drive / OCR / <School> / <Grade> / <Division> / <StudentName>_<StudentID> /
+      <StudentName>_<StudentID>_<Code>.pdf                    (a confirmed document)
 """
 
 from __future__ import annotations
 
+import contextlib
+import json
 import re
+import secrets
 import time
+import unicodedata
+from collections.abc import Callable
+from contextlib import AbstractContextManager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -70,7 +79,14 @@ def upload_scan_to_drive(
         suffix = Path(filename).suffix.lower() or ".bin"
         if display_name:
             stem = _safe_drive_stem(display_name)
-            drive_name = f"{stem}{suffix}" if not Path(stem).suffix else stem
+            # Only a real file extension counts as one already there. A name
+            # with an initial ("Ramesh S. Patil") has a "." that Path() reads
+            # as the start of a suffix, which used to leave the file with no
+            # .jpg at all.
+            if Path(stem).suffix.lower() in _MIME_BY_SUFFIX:
+                drive_name = stem
+            else:
+                drive_name = f"{stem}{suffix}"
         else:
             stamp = now_ist().strftime("%H%M%S")
             drive_name = f"{stamp}_{filename}"
@@ -139,6 +155,241 @@ def upload_scan_to_drive(
     except Exception as exc:  # noqa: BLE001 — never break the OCR flow
         debug_log(f"[DRIVE] upload error: {exc}")
         return None
+
+
+FOLDER_MIME = "application/vnd.google-apps.folder"
+
+
+class DriveUploadError(RuntimeError):
+    """A document could not be put in Drive. The message is safe to show."""
+
+
+class NoDriveToken(DriveUploadError):
+    """The session holds no Google token (signed in through Tether SSO)."""
+
+
+@dataclass(frozen=True)
+class DriveUpload:
+    """Where a document's PDF went.
+
+    Attributes:
+        file_id: Its Drive id.
+        name: Its name in Drive (with " (2)" when the name was taken).
+        link: Its webViewLink.
+        folder_path: The folders it is in, from My Drive down.
+    """
+
+    file_id: str
+    name: str
+    link: str
+    folder_path: str
+
+
+def has_drive_credentials() -> bool:
+    """Whether this session can upload to the person's own Drive.
+
+    Only a Google sign-in leaves a token in the session; a Tether SSO
+    hand-off proves who the person is but carries no Google credentials.
+    """
+    token = session.get("google_token")
+    return isinstance(token, dict) and bool(token.get("access_token") or token.get("refresh_token"))
+
+
+def drive_safe_name(name: str, fallback: str) -> str:
+    """A folder or file name Drive and every synced computer will take.
+
+    Control characters go, slashes and the other characters Windows refuses
+    in a file name become "-", runs of spaces become one, and trailing dots
+    and spaces go (Windows drops them, so Drive for Desktop would not match).
+
+    Args:
+        name: The name as it came from the database.
+        fallback: What to use when nothing is left.
+
+    Returns:
+        The cleaned name, at most 120 characters.
+    """
+    text = unicodedata.normalize("NFC", name or "")
+    text = "".join(ch for ch in text if unicodedata.category(ch)[0] != "C")
+    text = re.sub(r'[\\/:*?"<>|]+', "-", text)
+    text = re.sub(r"\s+", " ", text).strip().rstrip(". ")
+    return text[:120].rstrip(". ") or fallback
+
+
+def upload_document_pdf(
+    pdf: bytes,
+    folders: list[str],
+    file_name: str,
+    *,
+    folder_lock: Callable[[], AbstractContextManager[Any]] | None = None,
+) -> DriveUpload:
+    """Put a document's PDF in the signed-in person's Drive, under `folders`.
+
+    Each folder is found by name under the one before (starting at My
+    Drive) and only created when it is not there, so a retry or the next
+    form for the same class reuses the folders. A file of the same name
+    already in the last folder is kept, and this one is named " (2)",
+    " (3)" and so on. The PDF goes up in one request carrying its name and
+    folder, so a failure never leaves a stray file in My Drive.
+
+    Args:
+        pdf: The PDF.
+        folders: Folder names from the top (already drive_safe_name'd).
+        file_name: The PDF's name, ending ".pdf".
+        folder_lock: Makes the lock held while the folders are found or
+            made. Two uploads for one class at once would otherwise both
+            find no folder and both make one.
+
+    Returns:
+        Where it went.
+
+    Raises:
+        NoDriveToken: The session has no Google token.
+        DriveUploadError: Drive refused or could not be reached.
+    """
+    if not has_drive_credentials():
+        raise NoDriveToken("Sign in with Google to upload to Drive.")
+    try:
+        access_token = _get_valid_access_token()
+    except requests.RequestException as exc:
+        raise DriveUploadError("Could not reach Google to renew the sign-in.") from exc
+    if not access_token:
+        raise NoDriveToken("Sign in with Google to upload to Drive.")
+
+    try:
+        parent = "root"
+        with folder_lock() if folder_lock is not None else contextlib.nullcontext():
+            for name in folders:
+                parent = _find_or_create_folder(access_token, name, parent)
+        final_name = _free_name(access_token, parent, file_name)
+        created = _multipart_upload(access_token, parent, final_name, pdf)
+    except requests.RequestException as exc:
+        debug_log(f"[DRIVE] document upload could not reach Drive: {type(exc).__name__}: {exc}")
+        raise DriveUploadError("Could not reach Google Drive.") from exc
+
+    path = "/".join(folders)
+    debug_log(f"[DRIVE] document saved name={created.get('name')!r} path={path!r} id={created.get('id')!r}")
+    return DriveUpload(
+        file_id=str(created.get("id") or ""),
+        name=str(created.get("name") or final_name),
+        link=str(created.get("webViewLink") or ""),
+        folder_path=path,
+    )
+
+
+def _drive_query_text(value: str) -> str:
+    """A value quoted for a Drive search: backslashes and quotes escaped."""
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def _list_files(access_token: str, query: str, order_by: str | None = None) -> list[dict[str, Any]]:
+    """Every file a Drive search finds (following pages), in `order_by` order if given."""
+    found: list[dict[str, Any]] = []
+    page_token: str | None = None
+    while True:
+        params: dict[str, Any] = {
+            "q": query,
+            "spaces": "drive",
+            "fields": "nextPageToken,files(id,name)",
+            "pageSize": 1000,
+        }
+        if order_by:
+            params["orderBy"] = order_by
+        if page_token:
+            params["pageToken"] = page_token
+        listed = requests.get(
+            f"{DRIVE_API}/files",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params=params,
+            timeout=20,
+        )
+        if not listed.ok:
+            debug_log(f"[DRIVE] search failed status={listed.status_code} body={listed.text[:200]!r}")
+            raise DriveUploadError("Google Drive refused to list your folders.")
+        body = listed.json() or {}
+        found.extend(body.get("files") or [])
+        page_token = body.get("nextPageToken")
+        if not page_token:
+            return found
+
+
+def _find_or_create_folder(access_token: str, name: str, parent_id: str) -> str:
+    """The id of folder `name` under `parent_id`, created only when missing.
+
+    A failed search raises rather than creating: creating after a search
+    that merely failed is how a second "OCR" folder appears. When there are
+    two of one name already, the oldest is used, so every upload settles on
+    the same one - Drive lists them in no set order otherwise.
+    """
+    query = (
+        f"name='{_drive_query_text(name)}' and mimeType='{FOLDER_MIME}' "
+        f"and trashed=false and '{_drive_query_text(parent_id)}' in parents"
+    )
+    existing = _list_files(access_token, query, order_by="createdTime")
+    if existing:
+        return str(existing[0]["id"])
+    created = requests.post(
+        f"{DRIVE_API}/files",
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+        params={"fields": "id,name"},
+        json={"name": name, "mimeType": FOLDER_MIME, "parents": [parent_id]},
+        timeout=20,
+    )
+    if not created.ok:
+        debug_log(f"[DRIVE] folder create failed status={created.status_code} body={created.text[:200]!r}")
+        raise DriveUploadError("Google Drive refused to create a folder.")
+    folder_id = str((created.json() or {}).get("id") or "")
+    if not folder_id:
+        raise DriveUploadError("Google Drive did not say which folder it created.")
+    debug_log(f"[DRIVE] created folder {name!r} under {parent_id!r}")
+    return folder_id
+
+
+def _free_name(access_token: str, folder_id: str, file_name: str) -> str:
+    """`file_name`, or "<stem> (2).pdf" and on, whichever the folder lacks."""
+    taken = {
+        str(entry.get("name") or "")
+        for entry in _list_files(
+            access_token,
+            f"'{_drive_query_text(folder_id)}' in parents and trashed=false",
+        )
+    }
+    stem, dot, suffix = file_name.rpartition(".")
+    if not dot:
+        stem, suffix = file_name, ""
+    candidate = file_name
+    number = 2
+    while candidate in taken:
+        candidate = f"{stem} ({number}).{suffix}" if suffix else f"{stem} ({number})"
+        number += 1
+    return candidate
+
+
+def _multipart_upload(access_token: str, folder_id: str, name: str, pdf: bytes) -> dict[str, Any]:
+    """Create the PDF, named and in its folder, in a single request."""
+    boundary = f"ocr-{secrets.token_hex(12)}"
+    metadata = json.dumps({"name": name, "parents": [folder_id], "mimeType": "application/pdf"})
+    body = (
+        f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{metadata}\r\n"
+        f"--{boundary}\r\nContent-Type: application/pdf\r\n\r\n"
+    ).encode() + pdf + f"\r\n--{boundary}--\r\n".encode("ascii")
+    created = requests.post(
+        f"{DRIVE_UPLOAD_API}/files",
+        params={"uploadType": "multipart", "fields": "id,name,parents,webViewLink"},
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": f"multipart/related; boundary={boundary}",
+        },
+        data=body,
+        timeout=120,
+    )
+    if not created.ok:
+        debug_log(f"[DRIVE] document upload failed status={created.status_code} body={created.text[:300]!r}")
+        raise DriveUploadError("Google Drive refused the upload.")
+    payload = created.json() or {}
+    if not payload.get("id"):
+        raise DriveUploadError("Google Drive did not say which file it created.")
+    return payload
 
 
 def _safe_drive_stem(name: str) -> str:
