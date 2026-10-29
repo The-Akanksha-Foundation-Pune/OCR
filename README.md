@@ -196,14 +196,6 @@ See [Scanning through the Drive inbox](#scanning-through-the-drive-inbox): the
 scanner's software saves into a Google Drive folder and the server reads the
 pages from there.
 
-### The old scan helper
-
-Earlier versions scanned through a helper program run on the scanning computer
-(`tools/scan_agent.py` and its neighbours, once downloaded as
-`/scan-helper.zip`). Nothing uses it now: the page never contacts it, the
-download is gone, and the server has no code for it. The files stay in
-`tools/`, unused.
-
 ## Batch codes and documents
 
 Before scanning, write a **batch code** in the top-right corner of every page,
@@ -416,12 +408,6 @@ client/                     # frontend — server-rendered HTML + CSS
   static/
     style.css
 tools/                      # run by hand
-  scan_agent.py               # the old scan helper - unused, kept for reference
-  scanner_devices.py          # (old helper) finds scanners, and USB scanners missing a driver
-  scan_naps2.py               # (old helper) one scan through NAPS2
-  scan.ps1                    # (old helper) one scan through WIA on Windows
-  find-scanner.ps1            # Windows: what scanners and drivers are present
-  topdf.py
   migrate_times_to_ist.py     # one-off: shift old UTC rows to India time
 data/
   forms/          # blank EN/HI/MR templates

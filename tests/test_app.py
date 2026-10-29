@@ -1857,14 +1857,12 @@ def test_page_never_saves_a_document_nobody_confirmed(client: FlaskClient, tmp_p
 
 
 # ------------------------------------------- scanning: the scan folder
-def test_page_has_no_camera_and_offers_the_local_scanner(client: FlaskClient) -> None:
-    """Staff scan with the scanner on this computer. The page does not open a camera."""
+def test_page_has_no_camera_and_no_scan_helper(client: FlaskClient) -> None:
+    """Staff scan with the scanner; the page neither opens a camera nor calls a local helper."""
     html = client.get("/").get_data(as_text=True)
 
-    for gone in ("getUserMedia", "capture=", "Use camera", "Take photo", "scan-helper"):
+    for gone in ("getUserMedia", "capture=", "Use camera", "Take photo", "8765", "scan-helper", "scan helper"):
         assert gone not in html, gone
-    assert 'id="scanner-recheck"' in html and ">Check again<" in html
-    assert "127.0.0.1:8765" in html
     assert 'id="scan-folder-connect"' in html and ">Connect scan folder<" in html
     assert 'accept=".jpg,.jpeg,.png,.pdf,.tif,.tiff"' in html
     assert re.search(r'<input[^>]*id="file-input"[^>]*\bmultiple\b', html, re.DOTALL)
