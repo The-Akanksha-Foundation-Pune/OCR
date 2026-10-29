@@ -350,7 +350,11 @@ so Confirm says so and saves nothing.
 
 ### Uploading matched pages automatically
 
-Under the school picker, **Upload matched pages automatically** is on unless
+This is off unless the server sets `AUTO_UPLOAD=1` in `.env`. Without it the
+scan page shows no switch, every document waits for a person to press
+Confirm, and the server refuses an automatic confirm whatever a page sends.
+
+With it on, under the school picker, **Upload matched pages automatically** is on unless
 you switch it off, and the browser remembers your choice. Every scan is sent
 with the switch as it is at that moment (`auto_upload` on `POST /api/scans`),
 and each of its pages keeps it.

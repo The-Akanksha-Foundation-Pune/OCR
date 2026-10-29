@@ -80,6 +80,7 @@ from server.config import (
     DRIVE_OCR_FOLDER_NAME,
     QUEUE_CLAIM_STALE_SECONDS,
     RUN_GAP_MINUTES,
+    auto_upload_on,
     batch_codes_on,
 )
 from server.services import drive_store, scan_queue
@@ -1590,6 +1591,8 @@ def auto_upload_refusal(doc: Document) -> str:
 
 def _lasting_refusal(doc: Document) -> str:
     """Why a document may not go up by itself however long its stack settles (auto_upload_refusal), or ""."""
+    if not auto_upload_on():
+        return "automatic upload is switched off on this server"
     if not doc.is_open:
         return "it has already been confirmed"
     if not batch_codes_on():

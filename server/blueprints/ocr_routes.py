@@ -19,7 +19,7 @@ from flask import Blueprint, jsonify, render_template, request
 from flask.typing import ResponseReturnValue
 from werkzeug.utils import secure_filename
 
-from server.config import ALLOWED_EXTENSIONS, batch_codes_on
+from server.config import ALLOWED_EXTENSIONS, auto_upload_on, batch_codes_on
 from server.services.auth import require_login
 from server.services.debug_log import debug_log
 from server.services.drive_store import upload_scan_to_drive
@@ -86,7 +86,13 @@ def index() -> str:
     # added by hand) or through the Drive inbox. So nothing here depends on
     # the OS of the server or of the computer the scanner is plugged into.
     # batch_codes: whether the page asks for batch codes and sorts by them.
-    return render_template("index.html", active_page="scanner", batch_codes=batch_codes_on())
+    # auto_upload: whether the page offers Upload matched pages automatically.
+    return render_template(
+        "index.html",
+        active_page="scanner",
+        batch_codes=batch_codes_on(),
+        auto_upload=auto_upload_on(),
+    )
 
 
 @ocr_bp.get("/api/schools")

@@ -47,12 +47,12 @@
         Student ID page and the Declaration page scanned straight after it - is one
         document, one PDF{% endif %}; check each
         one under <strong>OCR results</strong> and press Confirm and upload.
-        Nothing is saved until you do - except that, with <strong>Upload matched
+        Nothing is saved until you do{% if auto_upload %} - except that, with <strong>Upload matched
         pages automatically</strong> on and one school picked, a Ready document
         whose Student ID is exactly one of that school's students, not yet marked
         scanned, is confirmed and uploaded by itself{% if not batch_codes %} once its
         Declaration page, scanned straight after it, and the page after that have
-        been read{% endif %}.</p>
+        been read{% endif %}{% endif %}.</p>
     </header>
 
     <section class="panel" aria-label="Upload scan">
@@ -88,13 +88,13 @@
 
           <!-- Remembered per browser and sent with every scan: only pages
                sent with it on can go up by themselves. -->
-          <div class="school-label-spaced">
+          <div class="school-label-spaced"{% if not auto_upload %} hidden{% endif %}>
             <label class="location-option" for="auto-upload">
-              <input type="checkbox" id="auto-upload" checked aria-describedby="auto-upload-hint" />
+              <input type="checkbox" id="auto-upload"{% if auto_upload %} checked{% else %} disabled{% endif %} aria-describedby="auto-upload-hint" />
               <span>Upload matched pages automatically</span>
             </label>
           </div>
-          <p class="school-hint" id="auto-upload-hint">
+          <p class="school-hint" id="auto-upload-hint"{% if not auto_upload %} hidden{% endif %}>
             Only with one school picked, not a whole city: a document whose
             Student ID - read or typed - is exactly one of that school's
             students is confirmed and uploaded to your Drive without pressing
@@ -361,11 +361,11 @@
             <p class="step-text">
               Under OCR results, check each document's Student ID and name and
               press Confirm and upload. A page that could not be read shows
-              the scan, so the ID{% if batch_codes %} or code{% endif %} can be typed from it. With
+              the scan, so the ID{% if batch_codes %} or code{% endif %} can be typed from it.{% if auto_upload %} With
               Upload matched pages automatically on, an exact match at the
               school picked, for a student not yet marked scanned, goes up by
               itself{% if not batch_codes %} once its Declaration page, scanned
-              straight after it, and the page after that have been read{% endif %}.
+              straight after it, and the page after that have been read{% endif %}.{% endif %}
             </p>
           </div>
         </div>
@@ -400,6 +400,9 @@
     // order this page sent them in (SENDER): no code is asked for or shown,
     // and the scans stay where the scanner saved them.
     const BATCH_CODES = {{ batch_codes|tojson }};
+    // Whether this server lets the page confirm documents by itself at all
+    // (config.AUTO_UPLOAD). Off: the switch is hidden and never counts as on.
+    const AUTO_UPLOAD = {{ auto_upload|tojson }};
     const form = document.getElementById("upload-form");
     const manualForm = document.getElementById("manual-form");
     const manualInput = document.getElementById("manual-input");
@@ -818,10 +821,10 @@
     // is still on (uploadMatchedDocuments).
     const AUTO_UPLOAD_KEY = "ocr.autoUpload";
     const autoUploadToggle = document.getElementById("auto-upload");
-    autoUploadToggle.checked = recall(AUTO_UPLOAD_KEY) !== "off";
+    autoUploadToggle.checked = AUTO_UPLOAD && recall(AUTO_UPLOAD_KEY) !== "off";
 
     function autoUploadOn() {
-      return Boolean(autoUploadToggle.checked);
+      return AUTO_UPLOAD && Boolean(autoUploadToggle.checked);
     }
 
     autoUploadToggle.addEventListener("change", () => {

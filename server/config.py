@@ -71,6 +71,18 @@ def batch_codes_on() -> bool:
     return BATCH_CODES
 
 
+# Upload matched pages automatically: off unless AUTO_UPLOAD=1. With it off the
+# scan page shows no switch, every document waits for a person to press
+# Confirm, and the server refuses an automatic confirm whatever a page sends.
+# The rest of the app asks auto_upload_on(), never this name.
+AUTO_UPLOAD = _env_flag("AUTO_UPLOAD") is True
+
+
+def auto_upload_on() -> bool:
+    """Whether the scan page may confirm documents by itself (Upload matched pages automatically)."""
+    return AUTO_UPLOAD
+
+
 # With batch codes off, a Declaration page is only paired inside its run: the
 # pages one scan page sent (its sender id), each reaching the server within
 # this many minutes of the one before. A longer pause starts a new run -

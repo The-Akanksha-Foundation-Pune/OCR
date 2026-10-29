@@ -81,6 +81,19 @@ def batch_codes(monkeypatch: pytest.MonkeyPatch) -> bool:
     return True
 
 
+@pytest.fixture(autouse=True)
+def auto_upload(monkeypatch: pytest.MonkeyPatch) -> bool:
+    """Upload matched pages automatically on, as the tests were written for, whatever .env says.
+
+    The app ships with it off (config.AUTO_UPLOAD); tests/test_auto_upload_off.py
+    overrides this fixture to run with it off.
+    """
+    from server import config
+
+    monkeypatch.setattr(config, "AUTO_UPLOAD", True)
+    return True
+
+
 # -------------------------------------------------------------------- fake DB
 @dataclass
 class FakeCursor:
