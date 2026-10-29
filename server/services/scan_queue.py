@@ -2,7 +2,8 @@
 
 Scanning only stores a page here and returns; the OCR worker
 (services/ocr_worker.py) reads it in the background, and nothing reaches the
-database or Drive until a person confirms the document (services/documents.py).
+database or Drive until the document is confirmed (services/documents.py) - by
+a person, or by the scan page for an exact match sent with auto_upload on.
 Everything is plain folders and JSON - no database tables - so a page that
 was waiting survives a restart, and the web app and the watcher process can
 share the queue on one disk.
@@ -16,11 +17,13 @@ share the queue on one disk.
         result.json      the reading plus the read-only student match
         code.json        a batch code typed by a person (overrides the reading)
         student_id.json  a Student ID typed by a person (overrides the reading)
+        declaration.json a person's word that the page is the Declaration page
+                         of the form scanned straight before it
     <QUEUE_DIR>/_pending/<page_id>                waiting for a reader
     <QUEUE_DIR>/_reading/<page_id>.<ms>.<token>   claimed by a reader at <ms>
     <QUEUE_DIR>/_owners/<owner>/open/<page_id>    not yet in a confirmed document
     <QUEUE_DIR>/_owners/<owner>/docs/<key>.json   a confirmed document
-    <QUEUE_DIR>/_owners/<owner>/locks/<code>.lock a confirm in progress
+    <QUEUE_DIR>/_owners/<owner>/locks/<key>.lock  a confirm in progress
     <QUEUE_DIR>/_owners/<owner>/locks/drive-folders.lock
                                                   finding or making Drive folders
     <QUEUE_DIR>/_worker_state.json                what the OCR worker is doing:
@@ -96,8 +99,13 @@ _LOCK_POLL_SECONDS = 0.05
 _PAGE_ID = re.compile(r"[0-9a-f]{32}")
 _CLAIM_NAME = re.compile(r"(?P<page>[0-9a-f]{32})\.(?P<ms>\d+)\.(?P<token>[0-9a-f]+)")
 # A document key: the code alone while open, the code and a token once
-# confirmed (so the same code written again later is a new document).
-_DOCUMENT_KEY = re.compile(r"B\d{1,3}-\d{1,3}(?:~[0-9a-f]{8})?")
+# confirmed (so the same code written again later is a new document). With
+# batch codes off a document is one form, keyed "P" and its Student ID page's
+# id - which no code can be - with the same token once confirmed.
+_DOCUMENT_KEY = re.compile(r"(?:B\d{1,3}-\d{1,3}|P[0-9a-f]{32})(?:~[0-9a-f]{8})?")
+# A scan page's id for one visit, as the page makes it: 32 hex digits, with
+# "-1" after them on the files added by hand.
+_SENDER = re.compile(r"[0-9a-f]{32}(?:-1)?")
 
 
 class DocumentBusy(RuntimeError):
@@ -124,6 +132,16 @@ class PageMeta:
         original: The name of the stored original ("original.tiff").
         error: Why it failed, once it has.
         updated_at: When this file was last written, India time.
+        auto_upload: Sent with Upload matched pages automatically on, so its
+            document may be confirmed without anyone pressing Confirm
+            (documents.auto_upload_refusal). Off for a page queued before
+            the switch existed: its meta.json has no such key.
+        sender: The id the scan page made for itself when it was loaded,
+            sent with every scan (is_sender), with "-1" after it on the
+            files added by hand: with batch codes off, only pages from one
+            scan page are one stack (documents._runs), and only a form sent
+            the one way may go up by itself. "" for a page sent by an older
+            page or any other client.
     """
 
     page_id: str
@@ -141,6 +159,8 @@ class PageMeta:
     original: str = ""
     error: str = ""
     updated_at: str = ""
+    auto_upload: bool = False
+    sender: str = ""
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PageMeta:
@@ -207,6 +227,10 @@ class Overrides:
         student_id: A Student ID typed by hand, or None.
         matched_student: The read-only match for that ID, or None.
         student_id_by: Who typed it.
+        declaration_of: With batch codes off, the id of the page this one
+            was attached to by hand as its Declaration page, or None.
+        declaration_by: Who attached it.
+        declaration_at: When, India time.
     """
 
     code: str | None = None
@@ -214,6 +238,9 @@ class Overrides:
     student_id: str | None = None
     matched_student: dict[str, Any] | None = None
     student_id_by: str = ""
+    declaration_of: str | None = None
+    declaration_by: str = ""
+    declaration_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -264,8 +291,18 @@ def is_page_id(text: str | None) -> bool:
 
 
 def is_document_key(text: str | None) -> bool:
-    """Whether `text` is a document key ("B1-12" or "B1-12~1a2b3c4d")."""
+    """Whether `text` is a document key ("B1-12", "P<page id>", either with "~1a2b3c4d")."""
     return bool(text) and bool(_DOCUMENT_KEY.fullmatch(str(text)))
+
+
+def is_sender(text: str | None) -> bool:
+    """Whether `text` is a scan page's id as the page makes it (PageMeta.sender)."""
+    return bool(text) and bool(_SENDER.fullmatch(str(text)))
+
+
+def page_document_key(page_id: str) -> str:
+    """The key of the form a page begins when batch codes are off: "P" and its id."""
+    return f"P{page_id}"
 
 
 def page_dir(page_id: str) -> Path:
@@ -341,6 +378,8 @@ def intake(
     owner_email: str,
     school: str = "",
     location: str = "",
+    auto_upload: bool = False,
+    sender: str = "",
 ) -> list[PageMeta]:
     """Store an upload in the queue, one queued page per page of the file.
 
@@ -357,6 +396,9 @@ def intake(
         owner_email: The signed-in person.
         school: The school picked on the page.
         location: The city picked on the page.
+        auto_upload: Whether the page's Upload matched pages automatically
+            switch was on when it sent the file.
+        sender: The scan page's id (is_sender), or "" for none.
 
     Returns:
         The queued pages, in page order.
@@ -408,6 +450,8 @@ def intake(
                 dpi=round(page.dpi, 1) if page.dpi else None,
                 original=f"original{suffix}",
                 updated_at=created,
+                auto_upload=auto_upload,
+                sender=sender,
             )
             write_json_atomic(folder / "meta.json", asdict(meta))
             metas.append(meta)
@@ -426,7 +470,7 @@ def intake(
         shutil.rmtree(staging, ignore_errors=True)
     debug_log(
         f"[QUEUE] queued {len(metas)} page(s) from {source_name!r} for {owner!r} "
-        f"school={school!r} location={location!r}"
+        f"school={school!r} location={location!r} auto_upload={auto_upload} sender={sender!r}"
     )
     return metas
 
@@ -528,12 +572,17 @@ def load_overrides(page_id: str) -> Overrides:
     folder = page_dir(page_id)
     code = read_json(folder / "code.json") or {}
     student = read_json(folder / "student_id.json") or {}
+    declaration = read_json(folder / "declaration.json") or {}
+    of = declaration.get("of")
     return Overrides(
         code=code.get("code") or None,
         code_by=str(code.get("by") or ""),
         student_id=student.get("student_id") or None,
         matched_student=student.get("matched_student") or None,
         student_id_by=str(student.get("by") or ""),
+        declaration_of=of if is_page_id(of) else None,
+        declaration_by=str(declaration.get("by") or ""),
+        declaration_at=str(declaration.get("at") or ""),
     )
 
 
@@ -564,6 +613,23 @@ def set_student_id_override(
         path,
         {"student_id": student_id, "matched_student": matched_student, "by": by, "at": _stamp()},
     )
+
+
+def set_declaration_override(page_id: str, of_page_id: str | None, by: str) -> None:
+    """Record (or with None, clear) a person's word that a page is the Declaration page of another.
+
+    Args:
+        page_id: The page the reader did not recognise as a Declaration page.
+        of_page_id: The page scanned straight before it, whose form it is
+            the Declaration page of.
+        by: Who said so.
+    """
+    path = page_dir(page_id) / "declaration.json"
+    if of_page_id is None:
+        with contextlib.suppress(FileNotFoundError):
+            path.unlink()
+        return
+    write_json_atomic(path, {"of": of_page_id, "by": by, "at": _stamp()})
 
 
 # ------------------------------------------------------------- claiming
@@ -872,13 +938,37 @@ def load_document_records(owner_email: str, since_hours: float | None = None) ->
     Returns:
         The records, newest first.
     """
+    listed, _older = document_records(owner_email, since_hours)
+    return listed
+
+
+def document_records(
+    owner_email: str, since_hours: float | None = None
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """A person's confirmed documents: those to list, and the finished ones from before.
+
+    Every record is read either way, so one read gives both. The listing
+    shows only the first; with batch codes off the pairing needs the pages
+    of every one, however old (documents._pages_beside), or a Declaration
+    page would pair differently once the form before it dropped off the
+    list.
+
+    Args:
+        owner_email: Whose.
+        since_hours: As for load_document_records.
+
+    Returns:
+        The records load_document_records gives, and the finished ones
+        written before `since_hours` - each newest first.
+    """
     folder = owner_dir(owner_email) / "docs"
     try:
         entries = list(os.scandir(folder))
     except FileNotFoundError:
-        return []
+        return [], []
     cutoff = None if since_hours is None else time.time() - since_hours * 3600
-    records: list[tuple[float, dict[str, Any]]] = []
+    listed: list[tuple[float, dict[str, Any]]] = []
+    older: list[tuple[float, dict[str, Any]]] = []
     for entry in entries:
         if not entry.name.endswith(".json") or entry.name.startswith("."):
             continue
@@ -890,10 +980,12 @@ def load_document_records(owner_email: str, since_hours: float | None = None) ->
         except OSError:
             continue
         if cutoff is not None and modified < cutoff and document_record_finished(record):
-            continue
-        records.append((modified, record))
-    records.sort(key=lambda item: item[0], reverse=True)
-    return [record for _, record in records]
+            older.append((modified, record))
+        else:
+            listed.append((modified, record))
+    listed.sort(key=lambda item: item[0], reverse=True)
+    older.sort(key=lambda item: item[0], reverse=True)
+    return [record for _, record in listed], [record for _, record in older]
 
 
 def document_record_history_pending(record: dict[str, Any]) -> bool:

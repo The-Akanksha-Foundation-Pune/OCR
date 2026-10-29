@@ -2,11 +2,13 @@
 
 Scanning stores pages and returns at once (services/scan_queue.py); this is
 where they are read. For each page it turns the page upright, reads the
-handwritten batch code in its corner, reads the Student ID with the same
-pipeline the scan page always used, and looks the student up - read-only,
-within the page's school or city - so the person checking the document sees
-who it matched. It never writes to the database and never uploads anything:
-that happens only when a person presses Confirm (services/documents.py).
+handwritten batch code in its corner (while batch codes are on), reads the
+Student ID with the same pipeline the scan page always used, and looks the
+student up - read-only, within the page's school or city - so the person
+checking the document sees who it matched. It never writes to the
+database and never uploads anything: that happens only when the document
+is confirmed (services/documents.py) - by a person pressing Confirm, or by
+the scan page itself for an exact match.
 
 Where it runs: in development a daemon thread inside the web app
 (start_in_process_worker, from create_app); in production the inbox
@@ -59,9 +61,10 @@ from server.config import (
     PAGE_MAX_DPI,
     PAGE_MAX_LONG_SIDE,
     QUEUE_MAX_ATTEMPTS,
+    batch_codes_on,
 )
 from server.services import scan_queue
-from server.services.batch_code import read_batch_code
+from server.services.batch_code import CodeReading, read_batch_code
 from server.services.clock import now_ist
 from server.services.debug_log import debug_log
 from server.services.extract_student_id import (
@@ -270,6 +273,9 @@ def read_ocr(meta: scan_queue.PageMeta) -> scan_queue.PageResult:
     whichever way up its batch code reads; the upside-down try is read by
     the local recogniser only. An upside-down page has its page.jpg turned
     round, so the thumbnails and the PDF are upright too.
+
+    With batch codes off (config.batch_codes_on) the code is not read, and
+    a page with no layout to match is kept as it was scanned.
     """
     grey = scan_queue.load_page_grey_image(meta.page_id)
     if grey is None:
@@ -277,7 +283,13 @@ def read_ocr(meta: scan_queue.PageMeta) -> scan_queue.PageResult:
     work = _working_copy(grey)
 
     angle = _layout_orientation(work)
-    if angle is None:
+    if not batch_codes_on():
+        # No batch codes: the corner is not read at all, here or by Google,
+        # and a page with no layout to match is kept the way it was scanned.
+        code = CodeReading(code=None)
+        if angle is None:
+            angle = 0
+    elif angle is None:
         code = read_code(grey)
         angle = 0
         if code.code is None:

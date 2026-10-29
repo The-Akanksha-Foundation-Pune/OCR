@@ -68,6 +68,19 @@ def _block_the_outside_world(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     monkeypatch.setattr(warmup, "warm_models_in_background", lambda: None)
 
 
+@pytest.fixture(autouse=True)
+def batch_codes(monkeypatch: pytest.MonkeyPatch) -> bool:
+    """Batch codes on, as the tests were written for, whatever .env says.
+
+    The app ships with them off (config.BATCH_CODES); tests/test_batch_codes_off.py
+    overrides this fixture to run with them off.
+    """
+    from server import config
+
+    monkeypatch.setattr(config, "BATCH_CODES", True)
+    return True
+
+
 # -------------------------------------------------------------------- fake DB
 @dataclass
 class FakeCursor:

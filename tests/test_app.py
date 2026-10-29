@@ -929,6 +929,8 @@ function loadPage(opts = {}) {
     Date: clock ? clock.Date : Date,
     URLSearchParams, URL, Math, JSON, Promise, String, Number, parseInt, Array, Set, Object, Error,
     TypeError, Boolean, RegExp, Uint8Array, Map, AbortController, AbortSignal,
+    // The browser's own random numbers, for the page's id (SENDER).
+    crypto: globalThis.crypto,
     localStorage: makeStorage(opts.local), sessionStorage: makeStorage(opts.session),
     navigator: opts.navigator || { userAgent: "Mozilla/5.0 (Macintosh)", platform: "MacIntel", maxTouchPoints: 0 },
     FormData: class { constructor() { this.parts = []; } append(k, v, n) { this.parts.push([k, v, n]); } },
@@ -1222,7 +1224,7 @@ def test_page_typed_id_is_looked_up_before_anything_is_saved(client: FlaskClient
       return { form: sentForm(sent), looked, writesBeforeConfirm, who, prefilled, body: JSON.parse(c.opts.body) };
     """)
 
-    assert out["form"] == {"file": "form.jpg", "school": "School A", "location": "Pune"}
+    assert out["form"] == {"file": "form.jpg", "school": "School A", "location": "Pune", "auto_upload": "1"}
     assert out["looked"] == [
         ["/api/pages/p1/student-id", {"student_id": "MOHSHA011021"}],
         ["/api/pages/p2/student-id", {"student_id": "MOHSHA011021"}],
@@ -1320,9 +1322,9 @@ def test_page_each_added_file_keeps_the_school_it_was_added_for(client: FlaskCli
     """)
 
     assert out["forms"] == [
-        {"file": "a1.jpg", "school": "School A", "location": "Pune"},
-        {"file": "a2.jpg", "school": "School A", "location": "Pune"},
-        {"file": "b1.jpg", "school": "School B", "location": "Pune"},
+        {"file": "a1.jpg", "school": "School A", "location": "Pune", "auto_upload": "1"},
+        {"file": "a2.jpg", "school": "School A", "location": "Pune", "auto_upload": "1"},
+        {"file": "b1.jpg", "school": "School B", "location": "Pune", "auto_upload": "1"},
     ]
     assert out["saves"] == 0
 
@@ -1356,8 +1358,8 @@ def test_page_scan_folder_keeps_each_scan_to_the_school_it_was_seen_under(
     """)
 
     assert out["sends"] == [
-        {"file": "Scan 001.jpg", "school": "School A", "location": "Pune"},
-        {"file": "Scan 002.jpg", "school": "School B", "location": "Pune"},
+        {"file": "Scan 001.jpg", "school": "School A", "location": "Pune", "auto_upload": "1"},
+        {"file": "Scan 002.jpg", "school": "School B", "location": "Pune", "auto_upload": "1"},
     ]
     assert out["held"] == ""
     assert "for School B" in out["state"]

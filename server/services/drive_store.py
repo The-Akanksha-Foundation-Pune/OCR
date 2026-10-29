@@ -195,6 +195,25 @@ def has_drive_credentials() -> bool:
     return isinstance(token, dict) and bool(token.get("access_token") or token.get("refresh_token"))
 
 
+def drive_sign_in_current() -> bool:
+    """Whether the session's Google sign-in is still in date, renewing it if it has run out.
+
+    has_drive_credentials only asks whether there is a token. This also
+    asks Google to renew one that has run out, and says False when it would
+    not (the sign-in was revoked, or there is no refresh token) or could not
+    be asked. A token revoked before it ran out still looks current here.
+    """
+    if not has_drive_credentials():
+        return False
+    try:
+        access_token = _get_valid_access_token()
+    except requests.RequestException as exc:
+        debug_log(f"[DRIVE] could not reach Google to renew the sign-in: {type(exc).__name__}")
+        return False
+    token = session.get("google_token") or {}
+    return bool(access_token) and time.time() < float(token.get("expires_at") or 0) - 60
+
+
 def drive_safe_name(name: str, fallback: str) -> str:
     """A folder or file name Drive and every synced computer will take.
 

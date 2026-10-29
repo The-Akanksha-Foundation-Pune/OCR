@@ -1,8 +1,9 @@
 """OCR upload routes and simple web UI.
 
 The scan page no longer scans through this module: it sends each file to
-POST /api/scans (blueprints/batch_routes.py), which only queues it, and a
-person confirms each document there before anything is saved. What stays
+POST /api/scans (blueprints/batch_routes.py), which only queues it, and each
+document is confirmed there - by a person, or for an exact match by the page
+itself - before anything is saved. What stays
 here is the page itself, the school list, the one-ID /api/confirm the
 page's "type a Student ID" box uses, and /api/extract and /api/extract-batch,
 kept for scripts and older pages that still call them. None of these is an
@@ -18,7 +19,7 @@ from flask import Blueprint, jsonify, render_template, request
 from flask.typing import ResponseReturnValue
 from werkzeug.utils import secure_filename
 
-from server.config import ALLOWED_EXTENSIONS
+from server.config import ALLOWED_EXTENSIONS, batch_codes_on
 from server.services.auth import require_login
 from server.services.debug_log import debug_log
 from server.services.drive_store import upload_scan_to_drive
@@ -84,7 +85,8 @@ def index() -> str:
     # only as files the browser uploads (from the watched scan folder, or
     # added by hand) or through the Drive inbox. So nothing here depends on
     # the OS of the server or of the computer the scanner is plugged into.
-    return render_template("index.html", active_page="scanner")
+    # batch_codes: whether the page asks for batch codes and sorts by them.
+    return render_template("index.html", active_page="scanner", batch_codes=batch_codes_on())
 
 
 @ocr_bp.get("/api/schools")

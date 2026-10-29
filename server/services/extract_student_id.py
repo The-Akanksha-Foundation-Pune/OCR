@@ -382,11 +382,19 @@ def confirm_student_id(
     defer_log: bool = False,
     school: str | None = None,
     location: str | None = None,
+    exact_only: bool = False,
+    unscanned_only: bool = False,
 ) -> ExtractResult:
     """
     Final step after the user reviews (and optionally corrects) the OCR
     preview in the UI. Looks up the given Student ID and, if found, marks
     scanned_at — this is the only place scanned_at gets written.
+
+    exact_only: find the student only by this exact ID, never by a
+    repaired near one (find_student_by_id) - for a document the scan page
+    confirms by itself, with nobody looking at the match.
+    unscanned_only: for the same, mark only a student not yet marked
+    scanned; one who is comes back unmarked, with already_scanned set.
 
     Raises ExtractError (400) for something that is not shaped like a
     Student ID, and LookupUnavailable (503) when the database cannot be
@@ -419,7 +427,12 @@ def confirm_student_id(
         message="ok",
     )
     result = _with_db_lookup(
-        result, mark_scanned=True, school=school, location=location
+        result,
+        mark_scanned=True,
+        school=school,
+        location=location,
+        exact_only=exact_only,
+        unscanned_only=unscanned_only,
     )
     if not defer_log:
         _log_confirm_attempt(result, image_link=image_link)
@@ -1047,12 +1060,16 @@ def _with_db_lookup(
     mark_scanned: bool = False,
     school: str | None = None,
     location: str | None = None,
+    exact_only: bool = False,
+    unscanned_only: bool = False,
 ) -> ExtractResult:
     """Attach active_student_data match for the OCR Student ID.
 
     mark_scanned=False (the default, used during OCR preview) never writes
     scanned_at — only confirm_student_id() does that, once the user has
-    reviewed/corrected the ID in the confirmation modal.
+    reviewed/corrected the ID in the confirmation modal. exact_only=True
+    finds the student only by this exact ID, and unscanned_only=True marks
+    only one not yet marked scanned (find_student_by_id).
 
     Raises LookupUnavailable when the database cannot be asked. Reporting
     that as "not found" is what filed real students' forms as not found.
@@ -1064,6 +1081,8 @@ def _with_db_lookup(
             mark_scanned=mark_scanned,
             school=school,
             location=location,
+            exact_only=exact_only,
+            unscanned_only=unscanned_only,
         )
     except DB_ERRORS as exc:
         # The detail stays in the server log. pymysql's message names the

@@ -30,9 +30,11 @@ def _env_flag(name: str) -> bool | None:
 
 
 # The scan queue (services/scan_queue.py). Scanning only stores pages here;
-# the OCR worker reads them in the background and a person confirms each
-# document before anything reaches the database or Drive. Plain folders and
-# JSON, no database tables, so a page waiting for OCR survives a restart.
+# the OCR worker reads them in the background and each document is confirmed
+# (by a person, or by the scan page for an exact match with its Upload
+# matched pages automatically switch on) before anything reaches the
+# database or Drive. Plain folders and JSON, no database tables, so a page
+# waiting for OCR survives a restart.
 QUEUE_DIR = _env_path("QUEUE_DIR", DATA_DIR / "queue")
 # Where the OCR worker runs. In development a thread inside the web app
 # reads the queue; unset, that follows Flask's debug mode (on under run.py).
@@ -55,6 +57,34 @@ PAGE_PDF_DPI = 200
 # (about 200 dpi on A4): the layout match and the crops are all fractions of
 # the page, and the full-page passes cost in proportion to its area.
 OCR_MAX_LONG_SIDE = 2400
+# Batch codes ("B1-12", handwritten in each form's corner) gather the pages
+# of one form into one document. Off for now: the corner is not read, and
+# each form is gathered by scan order instead - its Student ID page and the
+# Declaration page scanned straight after it are one document, one Confirm,
+# one PDF. Set BATCH_CODES=1 in .env to bring them back. The rest of the app
+# asks batch_codes_on(), never this name, so a test switches it here alone.
+BATCH_CODES = _env_flag("BATCH_CODES") is True
+
+
+def batch_codes_on() -> bool:
+    """Whether pages are gathered into documents by their batch code."""
+    return BATCH_CODES
+
+
+# With batch codes off, a Declaration page is only paired inside its run: the
+# pages one scan page sent (its sender id), each reaching the server within
+# this many minutes of the one before. A longer pause starts a new run -
+# which is held, like the run before it, when that one is held and it may
+# be the rest of its stack (documents._carry_on).
+RUN_GAP_MINUTES = 10
+# How long a Student ID page with nothing after it yet waits for its
+# Declaration page - the scanner's next file - before a person may confirm
+# it without one; and how long a form whose Declaration page has nothing
+# after it yet waits before it may go up by itself, in case the next file is
+# a page out of place.
+DECLARATION_WAIT_SECONDS = 120
+
+
 # Where the handwritten batch code ("B1-12") is written, as fractions
 # (x0, y0, x1, y1) of the upright page: the top-right corner, where the forms
 # carry their circled serial, and the top-left, where some prints put it.

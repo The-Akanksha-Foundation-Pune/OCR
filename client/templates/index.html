@@ -42,10 +42,17 @@
         Pick the location and school, then press the Scan button on the
         scanner - this page sends each page from your <strong>scan
         folder</strong> as the scanner saves it, or you can add scanned files
-        by hand. The pages are read in the background and gathered into
-        documents by the batch code in their top-right corner; check each
+        by hand. The pages are read in the background and {% if batch_codes %}gathered into
+        documents by the batch code in their top-right corner{% else %}each form - its
+        Student ID page and the Declaration page scanned straight after it - is one
+        document, one PDF{% endif %}; check each
         one under <strong>OCR results</strong> and press Confirm and upload.
-        Nothing is saved until you do.</p>
+        Nothing is saved until you do - except that, with <strong>Upload matched
+        pages automatically</strong> on and one school picked, a Ready document
+        whose Student ID is exactly one of that school's students, not yet marked
+        scanned, is confirmed and uploaded by itself{% if not batch_codes %} once its
+        Declaration page, scanned straight after it, and the page after that have
+        been read{% endif %}.</p>
     </header>
 
     <section class="panel" aria-label="Upload scan">
@@ -78,6 +85,30 @@
             Narrows the lookup to this school's students, so a misread ID cannot
             match a child at another school.
           </p>
+
+          <!-- Remembered per browser and sent with every scan: only pages
+               sent with it on can go up by themselves. -->
+          <div class="school-label-spaced">
+            <label class="location-option" for="auto-upload">
+              <input type="checkbox" id="auto-upload" checked aria-describedby="auto-upload-hint" />
+              <span>Upload matched pages automatically</span>
+            </label>
+          </div>
+          <p class="school-hint" id="auto-upload-hint">
+            Only with one school picked, not a whole city: a document whose
+            Student ID - read or typed - is exactly one of that school's
+            students is confirmed and uploaded to your Drive without pressing
+            Confirm{% if not batch_codes %}, once its one Declaration page, scanned
+            straight after it on this computer within a few minutes, has been
+            read - and so has the next form's Student ID page after it, or nothing
+            has come for a couple of minutes{% endif %}. A near match, no match, a student already marked scanned,
+            {% if not batch_codes %}a Student ID page with no Declaration page straight
+            after it, a Declaration page you attached by hand, a form with one sheet
+            from the scan folder and one added by hand, a stack with a page out of
+            place,
+            {% endif %}or anything that needs checking still waits for you.
+          </p>
+          <p class="school-hint" id="auto-upload-stopped" role="status" hidden></p>
         </div>
 
         <!-- The scanner. Staff start each scan at the scanner - its Scan
@@ -254,8 +285,11 @@
     </section>
 
     <!-- The second stage: what OCR made of the pages, gathered into
-         documents by the handwritten batch code, one group per batch. A
-         person confirms each document; only that saves it and uploads it. -->
+         documents by the handwritten batch code, one group per batch - or,
+         with batch codes off, one document per form: its Student ID page and
+         the Declaration page scanned straight after it. Each document is
+         confirmed - by a person, or by the page itself for an exact match
+         with the auto-upload switch on; only that saves it and uploads it. -->
     <section class="panel results-panel" id="ocr-panel" aria-labelledby="ocr-title">
       <div class="section-head">
         <h2 class="section-title" id="ocr-title">OCR results</h2>
@@ -263,19 +297,32 @@
       </div>
       <p class="section-status" id="ocr-status" aria-live="polite">Loading the OCR results…</p>
       <p class="section-note">
-        Each form carries a batch code such as <strong>B1-1</strong>, written in its
-        top-right corner; pages with the same code are one document. Check each
-        document and press <strong>Confirm and upload</strong> - nothing is saved, and
-        nothing goes to Drive, until you do. Confirmed documents go to your Google
-        Drive under OCR / School / Grade / Division, and are listed in
-        <a href="{{ url_for('history.history_page') }}">History</a>.
+        {% if batch_codes %}Each form carries a batch code such as <strong>B1-1</strong>, written in its
+        top-right corner; pages with the same code are one document.{% else %}Each form is
+        one document: its Student ID page and the Declaration page scanned straight
+        after it, which has no Student ID, go to Drive as one PDF, the Student ID page
+        first. A form whose ID could not be read waits under Unsorted, its Declaration
+        page with it, until you type the ID. A Declaration page with no Student ID page
+        right before it waits there on its own, and the forms scanned with it wait for
+        you to check them - as they do after a Student ID page with no Declaration page
+        after it; a Declaration page the reader missed can be attached there to the
+        form straight before it.{% endif %} Check each
+        document and press <strong>Confirm and upload</strong> - until then nothing is
+        saved, and nothing goes to Drive. The one exception, with <strong>Upload
+        matched pages automatically</strong> on: a Ready document scanned for one
+        school whose Student ID is exactly a student there - one not yet marked
+        scanned, with no other document for them{% if not batch_codes %}, and its
+        Declaration page read straight after it, then the page after that{% endif %} - is confirmed and uploaded by
+        itself, and says so; every other document still waits for you. Confirmed
+        documents go to your Google Drive under OCR / School / Grade / Division, and
+        are listed in <a href="{{ url_for('history.history_page') }}">History</a>.
       </p>
       <p class="sr-only" id="ocr-live" aria-live="polite"></p>
       <div class="ocr-batches" id="ocr-batches"></div>
       <section class="ocr-batch" id="ocr-unsorted" aria-labelledby="ocr-unsorted-title" hidden>
         <div class="ocr-batch-head">
           <h3 class="ocr-batch-title" id="ocr-unsorted-title">Unsorted</h3>
-          <span class="ocr-batch-counts">No batch code was read - type it from the scan</span>
+          <span class="ocr-batch-counts">{% if batch_codes %}No batch code was read{% else %}No Student ID was read{% endif %} - type it from the scan</span>
         </div>
         <ol class="ocr-docs" id="ocr-unsorted-list"></ol>
       </section>
@@ -297,11 +344,13 @@
         <div class="step-card">
           <span class="step-num" aria-hidden="true">2</span>
           <div>
-            <p class="step-title">Code each form, then scan</p>
+            <p class="step-title">{% if batch_codes %}Code each form, then scan{% else %}Scan the forms{% endif %}</p>
             <p class="step-text">
-              Write the batch code - B1-1, B1-2 and so on - in the top-right
+              {% if batch_codes %}Write the batch code - B1-1, B1-2 and so on - in the top-right
               corner of every page, the same code on each page of one form.
-              Scan into the connected scan folder, or add the files by hand.
+              {% endif %}Scan into the connected scan folder, or add the files by hand.{% if not batch_codes %}
+              Scan each form's Student ID page and, straight after it, its
+              Declaration page: the two are one document.{% endif %}
             </p>
           </div>
         </div>
@@ -312,7 +361,11 @@
             <p class="step-text">
               Under OCR results, check each document's Student ID and name and
               press Confirm and upload. A page that could not be read shows
-              the scan, so the ID or code can be typed from it.
+              the scan, so the ID{% if batch_codes %} or code{% endif %} can be typed from it. With
+              Upload matched pages automatically on, an exact match at the
+              school picked, for a student not yet marked scanned, goes up by
+              itself{% if not batch_codes %} once its Declaration page, scanned
+              straight after it, and the page after that have been read{% endif %}.
             </p>
           </div>
         </div>
@@ -321,7 +374,8 @@
           <div>
             <p class="step-title">Find it in Drive and History</p>
             <p class="step-text">
-              Each confirmed document is one PDF in your Google Drive, under
+              Each confirmed document is one PDF in your Google Drive{% if not batch_codes %},
+              its Student ID page first and its Declaration page after it{% endif %}, under
               OCR / School / Grade / Division / Student, and is listed in
               History.
             </p>
@@ -340,6 +394,12 @@
     // in production). script_root carries that prefix; without it every fetch
     // below would go to the host root and hit whatever else lives there.
     const API_BASE = "{{ request.script_root }}";
+    // Whether forms carry batch codes (BATCH_CODES in .env). With them off
+    // each form is one document - its Student ID page and the Declaration
+    // page scanned straight after it, which the server puts together by the
+    // order this page sent them in (SENDER): no code is asked for or shown,
+    // and the scans stay where the scanner saved them.
+    const BATCH_CODES = {{ batch_codes|tojson }};
     const form = document.getElementById("upload-form");
     const manualForm = document.getElementById("manual-form");
     const manualInput = document.getElementById("manual-input");
@@ -488,8 +548,10 @@
     // /api/scans, which stores it, splits a multi-page PDF or TIFF into its
     // pages and queues each for OCR, and answers at once. The reading
     // happens on the server in its own time and shows up under OCR results,
-    // where a person confirms each document. Nothing is saved to the
-    // database or Drive before that, so there is no automatic path here.
+    // where each document is confirmed - by a person, or by this page for an
+    // exact match while Upload matched pages automatically is on (each scan
+    // carries the switch as it was when the scan was sent). Nothing is saved
+    // to the database or Drive before that.
     //
     // One file at a time, in the order they came in: the server keeps a
     // document's pages in the order it received them, so its parts stay in
@@ -512,6 +574,25 @@
     const received = [];
     const receivedByKey = new Map();
     let receivedSeq = 0;
+    // Without batch codes, the id this page makes for itself on every load
+    // and sends with each scan: the server pairs a Declaration page only
+    // with the Student ID page sent just before it under the same id, so
+    // two computers - or two tabs - on one sign-in never mix their stacks,
+    // and only scans that carry one can go up by themselves. Files added by
+    // hand carry it with "-1" after it (HAND_SENDER): they pair with the
+    // scans around them as one stack, but a form with one sheet from the
+    // scan folder and one added by hand - added while the scanner was
+    // between its two sheets, say - waits for a person.
+    const SENDER = BATCH_CODES ? "" : newSender();
+    const HAND_SENDER = SENDER ? `${SENDER}-1` : "";
+
+    function newSender() {
+      // Without it the scans still pair, by time alone, but wait for a person.
+      if (!window.crypto || typeof window.crypto.getRandomValues !== "function") return "";
+      const bytes = new Uint8Array(16);
+      window.crypto.getRandomValues(bytes);
+      return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    }
 
     function receivedEntry(file, key) {
       const known = key ? receivedByKey.get(key) : null;
@@ -529,9 +610,11 @@
       return entry;
     }
 
-    // items: [{ file, scope, key?, reread?, onRetry?, onDone? }]. scope is
-    // the school and city the file is for, fixed when it came in: picking
-    // the next school while a stack is still going out cannot move it (#17).
+    // items: [{ file, scope, sender?, key?, reread?, onRetry?, onDone? }].
+    // scope is the school and city the file is for, fixed when it came in:
+    // picking the next school while a stack is still going out cannot move
+    // it (#17). sender is the page's id it is sent with (SENDER, or
+    // HAND_SENDER for a file added by hand), none with codes.
     // key is the scan folder's name for the file, so a retry keeps its row.
     // reread() gives the file as it is now, before it is tried again, or
     // null when it is gone or changed. onRetry(outcome, wait) hears each
@@ -588,7 +671,7 @@
             }
             item.file = file;
           }
-          const outcome = await sendScan(item.file, item.scope);
+          const outcome = await sendScan(item.file, item.scope, item.sender);
           const entry = item.entry;
           if (outcome.retry) {
             item.tries += 1;
@@ -660,11 +743,13 @@
     // server restarting), signed out (401), refused (403), busy (429),
     // failing (5xx), or an answer that is not the server's own - so it may
     // go through later. Taking such a file as sent would lose it for good.
-    async function sendScan(file, scope) {
+    async function sendScan(file, scope, sender) {
       const body = new FormData();
       body.append("file", file);
       body.append("school", (scope && scope.school) || "");
       body.append("location", (scope && scope.location) || "");
+      body.append("auto_upload", autoUploadOn() ? "1" : "0");
+      if (sender) body.append("sender", sender);
       let response;
       try {
         response = await fetch(API_BASE + "/api/scans", { method: "POST", body });
@@ -725,6 +810,30 @@
         return "";
       }
     }
+
+    // Upload matched pages automatically, beside the school picker: on unless
+    // this browser was told otherwise, and remembered like the school. Every
+    // scan is sent with it as it is at that moment (sendScan); only pages sent
+    // with it on can have their document go up by itself, and only while it
+    // is still on (uploadMatchedDocuments).
+    const AUTO_UPLOAD_KEY = "ocr.autoUpload";
+    const autoUploadToggle = document.getElementById("auto-upload");
+    autoUploadToggle.checked = recall(AUTO_UPLOAD_KEY) !== "off";
+
+    function autoUploadOn() {
+      return Boolean(autoUploadToggle.checked);
+    }
+
+    autoUploadToggle.addEventListener("change", () => {
+      remember(AUTO_UPLOAD_KEY, autoUploadOn() ? "on" : "off");
+      // On again: what was sent with it on, and not tried yet, goes now -
+      // and, without batch codes, a form whose stack is still settling is
+      // looked at again until it may.
+      if (autoUploadOn()) {
+        uploadMatchedDocuments();
+        if (!BATCH_CODES) scheduleResults();
+      }
+    });
 
     // Rebuild the school list for the chosen city. Keeps the current school
     // selected when it belongs to that city, so switching back and forth
@@ -930,14 +1039,18 @@
         ];
         start = "start the scan from the scanner's software";
       }
-      const load =
-        "Write each form's batch code (B1-1, B1-2 ...) in its top-right corner, load " +
-        `the forms with page 1 of each face down, and ${start}.`;
+      const load = BATCH_CODES
+        ? "Write each form's batch code (B1-1, B1-2 ...) in its top-right corner, load " +
+          `the forms with page 1 of each face down, and ${start}.`
+        : `Load the forms with page 1 of each face down, and ${start}.`;
       if (canWatchFolder) {
         steps.push(
-          "Press <strong>Connect scan folder</strong> above, pick that same folder, and " +
-            "let the browser view and edit its files - each scan is moved into a folder " +
-            "for its batch (B1, B2 ...) once its document is ready to confirm.",
+          BATCH_CODES
+            ? "Press <strong>Connect scan folder</strong> above, pick that same folder, and " +
+              "let the browser view and edit its files - each scan is moved into a folder " +
+              "for its batch (B1, B2 ...) once its document is ready to confirm."
+            : "Press <strong>Connect scan folder</strong> above, pick that same folder, and " +
+              "let the browser view its files. The scans stay where the scanner saved them.",
           `${load} This page picks each scan up within a few seconds.`
         );
       } else {
@@ -1217,9 +1330,10 @@
 
     // Whether the scans are sorted into batch folders, said under the state
     // line - so a folder opened read-only does not look like a broken sort.
+    // Without batch codes nothing is sorted, and there is nothing to say.
     function paintSortNote(show, named) {
-      scanFolderSort.hidden = !show;
-      if (!show) return;
+      scanFolderSort.hidden = !show || !BATCH_CODES;
+      if (scanFolderSort.hidden) return;
       const text = watch.canSort
         ? `Each scan is moved into a folder for its batch (B1, B2 ...) inside ${named} ` +
           "once its document is ready to confirm; one that needs checking stays here until then."
@@ -1382,7 +1496,7 @@
       queueScans(
         ready.sort((a, b) => byScanOrder(a.file, b.file)).map(({ key, file, scope }) => {
           watch.inFlight.add(key);
-          return Object.assign({ file, scope, key }, scanFolderSend(key, handle, folder, file));
+          return Object.assign({ file, scope, key, sender: SENDER }, scanFolderSend(key, handle, folder, file));
         })
       );
     }
@@ -1428,6 +1542,9 @@
     // while the file there is still the one that was sent; anything else in
     // the folder is left alone. The watch reads only the folder's own files,
     // never the batch folders inside it, so a sorted scan is not sent again.
+    // Without batch codes nothing is moved: every scan stays where it was
+    // saved, and is known by its name, size and time, so it is not sent
+    // again either.
     const BATCH_FOLDER = /^B\d{1,3}$/;
     const SORT_WHEN = new Set(["ready", "confirmed", "uploaded"]);
 
@@ -1441,7 +1558,7 @@
     }
 
     async function sortScanFolder() {
-      if (!watch.sortDue || !watch.canSort || watch.sorting || !watch.handle) return;
+      if (!BATCH_CODES || !watch.sortDue || !watch.canSort || watch.sorting || !watch.handle) return;
       // Only the tab that is watching: two tabs moving the same scan would
       // trip over each other.
       if (!watch.polling || watch.elsewhere || watch.permission !== "granted") return;
@@ -1732,11 +1849,15 @@
     }
 
     // Asked for with editing, so the page can sort the scans it sent into
-    // batch folders; the browser says so in its own prompt.
+    // batch folders; the browser says so in its own prompt. Without batch
+    // codes nothing is sorted, so only viewing is asked for.
     async function pickScanFolder() {
       let handle;
       try {
-        handle = await window.showDirectoryPicker({ id: "ocr-scan-folder", mode: "readwrite" });
+        handle = await window.showDirectoryPicker({
+          id: "ocr-scan-folder",
+          mode: BATCH_CODES ? "readwrite" : "read",
+        });
       } catch (error) {
         // Closing the folder chooser is not a problem worth a red line.
         if (error && error.name === "AbortError") return;
@@ -1750,14 +1871,15 @@
     async function reconnectScanFolder() {
       let state = "denied";
       try {
-        state = await watch.handle.requestPermission({ mode: "readwrite" });
+        state = await watch.handle.requestPermission({ mode: BATCH_CODES ? "readwrite" : "read" });
       } catch (_) {
         state = "denied";
       }
-      const writable = state === "granted";
+      const writable = BATCH_CODES && state === "granted";
       if (!writable) {
-        // Editing refused: reading may still be allowed, and is enough to
-        // carry on sending - only without the sorting.
+        // Editing refused (or, without batch codes, never asked for):
+        // reading may still be allowed, and is enough to carry on sending -
+        // only without the sorting.
         try {
           state = await watch.handle.queryPermission({ mode: "read" });
         } catch (_) {
@@ -1890,7 +2012,8 @@
       // these files are sent for, whatever is picked after.
       await schoolsLoaded;
       const scope = pickerScope();
-      queueScans(scans.map((file) => ({ file, scope })));
+      // Marked as added by hand (HAND_SENDER).
+      queueScans(scans.map((file) => ({ file, scope, sender: HAND_SENDER })));
     }
 
     fileInput.addEventListener("change", () => {
@@ -2068,6 +2191,39 @@
       return typeof doc.parts === "number" ? doc.parts : pagesOf(doc).length;
     }
 
+    // A page OCR found to be a form's Declaration page, which has no Student
+    // ID - or one a person attached to its form as one.
+    function isDeclaration(page) {
+      return String(pageField(page, "skip_reason") || "") === "declaration" || Boolean(pageField(page, "declaration_by"));
+    }
+
+    // A Declaration page the reader recognised itself, not one attached by hand.
+    function readAsDeclaration(page) {
+      return String(pageField(page, "skip_reason") || "") === "declaration" && !pageField(page, "declaration_by");
+    }
+
+    // Without batch codes, pages the server put together as one form: a
+    // Student ID page alone, or with the Declaration page after it. A
+    // document confirmed with a code is told by its parts, as with codes.
+    function isForm(pages) {
+      return !BATCH_CODES && (pages.length === 1 || (pages.length === 2 && isDeclaration(pages[1])));
+    }
+
+    // What one of a document's parts is called: Part 1, Part 2... - or, in
+    // a form, its Student ID page and its Declaration page.
+    function partLabel(pages, i) {
+      if (!isForm(pages)) return `Part ${i + 1}`;
+      return i === 0 ? "Student ID page" : "Declaration page";
+    }
+
+    // What a document is made of, for its card: "2 parts", or for a form
+    // "Student ID page + Declaration page".
+    function partsText(doc) {
+      const pages = pagesOf(doc);
+      if (!isForm(pages)) return plural(partCount(doc), "part");
+      return pages.length === 2 ? "Student ID page + Declaration page" : "Student ID page";
+    }
+
     function docKey(doc) {
       return String(doc.key || doc.document_key || doc.id || doc.code || "");
     }
@@ -2125,6 +2281,13 @@
     // The scanned page itself - only ever served to the person who sent it.
     function imageUrl(pageId, size) {
       return `${API_BASE}/api/pages/${encodeURIComponent(pageId)}/image?size=${size}`;
+    }
+
+    // The scan a page came from: "Scan 001.jpg", or "stack.pdf - page 2".
+    function scanName(page) {
+      const name = String(pageField(page, "source_name") || "Scan");
+      const sourcePage = Number(pageField(page, "source_page")) || 0;
+      return Number(pageField(page, "source_pages")) > 1 && sourcePage ? `${name} - page ${sourcePage}` : name;
     }
 
     function labelled(prefix, value) {
@@ -2304,8 +2467,9 @@
     // grouped by batch, and an Unsorted group for pages with no code read.
     // Asked for every 3 seconds while anything is still being read and the
     // tab is on screen, and not at all otherwise: one request at a time, and
-    // at most one booked. Confirm and upload, pressed by a person, is the
-    // only way this page saves a scanned form.
+    // at most one booked. Confirm and upload is the only way this page saves
+    // a scanned form - pressed by a person, or made by the page itself for a
+    // document the server lists as auto_upload (uploadMatchedDocuments).
     const RESULTS_EVERY_MS = 3000;
     const ocrStatus = document.getElementById("ocr-status");
     const ocrLive = document.getElementById("ocr-live");
@@ -2323,7 +2487,7 @@
       sent: 0,              // scans the server took on this visit
       answered: 0,          // ... that the last answer was asked for after
       failures: 0,
-      outcomes: new Map(),  // document key -> { status, link, folder, error, key, pages } from this visit's confirms
+      outcomes: new Map(),  // document key -> { status, link, folder, error, key, pages, automatic } from this visit's confirms
       drafts: new Map(),    // what someone typed, by field, kept across redraws
       notes: new Map(),     // card -> the last thing that went wrong on it, kept across redraws
       docViews: new Map(),  // document key -> its card
@@ -2391,7 +2555,9 @@
       };
       listOf(data.batches).forEach((batch) => {
         listOf(batch.documents).forEach((doc) => {
-          const label = codeBatch(doc.code) || batchLabel(batch.batch);
+          // One with no code, confirmed while batch codes were off, has no
+          // batch: its scans are never moved into a batch folder.
+          const label = codeBatch(doc.code) || (doc.code ? batchLabel(batch.batch) : "");
           pagesOf(doc).forEach((page) => add(page, label, doc));
         });
       });
@@ -2403,15 +2569,19 @@
     }
 
     // Anything still to come: a scan sent since the last answer was asked
-    // for, a page queued or being read, or a document waiting for a part.
+    // for, a page queued or being read, a document waiting for a part - or,
+    // while this page uploads by itself, a form that may go up once its
+    // stack has settled (auto_upload_pending): with nothing after its
+    // Declaration page, only time can tell.
     function resultsUnfinished() {
       if (results.sent > results.answered) return true;
       const data = results.data;
       if (!data) return false;
       const queue = data.queue || {};
       if ((Number(queue.queued) || 0) + (Number(queue.reading) || 0) > 0) return true;
+      const settling = (doc) => doc.auto_upload_pending === true && autoUploadOn() && !autoUpload.stopped;
       return listOf(data.batches).some((batch) =>
-        listOf(batch.documents).some((doc) => effectiveStatus(doc) === "waiting")
+        listOf(batch.documents).some((doc) => effectiveStatus(doc) === "waiting" || settling(doc))
       );
     }
 
@@ -2484,6 +2654,7 @@
       paintResults();
       paintReceived();
       requestSort();
+      uploadMatchedDocuments();
     }
 
     function paintResults() {
@@ -2495,7 +2666,11 @@
       listOf(data.batches).forEach((batch) => {
         const list = listOf(batch.documents);
         if (!list.length) return;
-        const label = batchLabel(batch.batch) || codeBatch(list[0].code) || "Batch";
+        // Without batch codes the server sends one group with no batch:
+        // every document in one list, newest first, under no heading. With
+        // them on, so are the documents confirmed while they were off.
+        const coded = BATCH_CODES && batch.batch !== null;
+        const label = coded ? batchLabel(batch.batch) || codeBatch(list[0].code) || "Batch" : "";
         const view = batchView(label);
         liveBatches.add(label);
         placeChildren(
@@ -2548,9 +2723,13 @@
       if (counts.ready) bits.push(`${plural(counts.ready, "document")} ready to confirm`);
       const attention = (counts.attention || 0) + (counts.failed || 0);
       if (attention) bits.push(`${plural(attention, "document")} to check`);
-      if (unsortedCount) bits.push(`${plural(unsortedCount, "page")} without a batch code`);
+      if (unsortedCount) {
+        bits.push(`${plural(unsortedCount, "page")} without a ${BATCH_CODES ? "batch code" : "Student ID"}`);
+      }
       if (reading) bits.push(`${plural(reading, "page")} still waiting for OCR`);
-      if (counts.waiting) bits.push(`${plural(counts.waiting, "document")} waiting for a part`);
+      if (counts.waiting) {
+        bits.push(`${plural(counts.waiting, "document")} waiting for ${BATCH_CODES ? "a part" : "a Declaration page"}`);
+      }
       if (counts.confirmed) bits.push(`${counts.confirmed} saved but not in Drive yet`);
       if (counts.uploaded) bits.push(`${counts.uploaded} uploaded`);
       setLine(
@@ -2576,11 +2755,16 @@
       if (known) return known;
       const el = make("section", "ocr-batch");
       const head = make("div", "ocr-batch-head");
-      const title = make("h3", "ocr-batch-title", label);
-      title.id = "ocr-batch-" + label.replace(/[^A-Za-z0-9_-]/g, "");
-      el.setAttribute("aria-labelledby", title.id);
+      // No label: the one list of documents there is without batch codes.
+      if (label) {
+        const title = make("h3", "ocr-batch-title", label);
+        title.id = "ocr-batch-" + label.replace(/[^A-Za-z0-9_-]/g, "");
+        el.setAttribute("aria-labelledby", title.id);
+        head.appendChild(title);
+      } else {
+        el.setAttribute("aria-label", "Documents");
+      }
       const counts = make("span", "ocr-batch-counts");
-      head.appendChild(title);
       head.appendChild(counts);
       const list = make("ol", "ocr-docs");
       el.appendChild(head);
@@ -2601,6 +2785,7 @@
         doc.upload_error || "",
         doc.drive_folder || "",
         driveLink(doc),
+        doc.confirmed_automatically === true,
         outcomeFor(doc),
         docMatch(doc),
         pagesOf(doc).map((page) => [
@@ -2699,14 +2884,15 @@
     function thumbStrip(view, pages, code) {
       const strip = make("div", "ocr-thumbs");
       pages.forEach((page, i) => {
-        const label = `Part ${i + 1}`;
+        const label = partLabel(pages, i);
         if (STILL_READING.has(pageStatus(page))) {
           strip.appendChild(make("span", "ocr-thumb is-waiting", `${label} - waiting for OCR`));
           return;
         }
         const pageId = pageIdOf(page);
         const link = makeLink("", "ocr-thumb", imageUrl(pageId, "full"));
-        link.setAttribute("aria-label", `Open ${label.toLowerCase()} of ${code} full size`);
+        // "Open part 1 of B1-1 full size", or "Open the Declaration page of Scan.tiff full size".
+        link.setAttribute("aria-label", `Open ${isForm(pages) ? `the ${label}` : label.toLowerCase()} of ${code} full size`);
         const img = document.createElement("img");
         img.src = imageUrl(pageId, "thumb");
         img.alt = "";
@@ -2804,10 +2990,14 @@
 
     function buildDocView(doc, sig) {
       const key = docKey(doc);
-      const code = String(doc.code || key);
       const pages = pagesOf(doc);
+      // What the card is called: its code, or without batch codes the scan
+      // its page came from.
+      const code = BATCH_CODES ? String(doc.code || key) : scanName(pages[0]);
       const status = effectiveStatus(doc);
       const outcome = outcomeFor(doc) || {};
+      // Confirmed by this page itself, with nobody pressing the button.
+      const automatic = doc.confirmed_automatically === true || outcome.automatic === true;
       const match = docMatch(doc);
       // Parts that disagree leave the box empty: the person types the ID
       // from the scans rather than accept one part's.
@@ -2823,8 +3013,13 @@
 
       const head = make("div", "ocr-doc-head");
       head.appendChild(make("span", "ocr-doc-code", code));
-      head.appendChild(make("span", "ocr-doc-parts", plural(partCount(doc), "part")));
-      head.appendChild(make("span", "ocr-pill is-" + (DOC_LOOKS[status] || "attention"), DOC_STATES[status] || status));
+      head.appendChild(make("span", "ocr-doc-parts", partsText(doc)));
+      let pill = DOC_STATES[status] || status;
+      if (status === "uploaded" && automatic) pill = "Uploaded automatically";
+      // Without batch codes the only document that waits is a form waiting
+      // for its Declaration page: nothing of it is left to read.
+      else if (status === "waiting" && !BATCH_CODES) pill = "Waiting for its Declaration page";
+      head.appendChild(make("span", "ocr-pill is-" + (DOC_LOOKS[status] || "attention"), pill));
       el.appendChild(head);
 
       let who;
@@ -2857,20 +3052,25 @@
         pages.forEach((page, i) => {
           if (STILL_READING.has(pageStatus(page))) return;
           const pageId = pageIdOf(page);
-          const caption = `${code} - part ${i + 1} of ${pages.length}`;
+          let caption = code;
+          if (BATCH_CODES) caption = `${code} - part ${i + 1} of ${pages.length}`;
+          // Without batch codes each scan of a form says which sheet it is.
+          else if (pages.length > 1) caption = `${scanName(page)} - ${partLabel(pages, i)}`;
           const figure = scanFigure(view, pageId, caption);
-          // A misread code puts a page in the wrong document; it is put
-          // right here, from the corner of the scan above.
-          const row = make("div", "ocr-form-row");
-          const fieldName = "code-" + pageId;
-          row.appendChild(
-            textField(view, fieldName, "code:" + pageId, String(pageField(page, "code") || code),
-              "Code on this page", "e.g. B1-12", `Batch code on ${caption}`,
-              () => setPageCode(view, pageId, fieldName))
-          );
-          addButton(view, row, "Set code", "ocr-btn secondary", `Set the batch code of ${caption}`,
-            () => setPageCode(view, pageId, fieldName));
-          figure.appendChild(row);
+          if (BATCH_CODES) {
+            // A misread code puts a page in the wrong document; it is put
+            // right here, from the corner of the scan above.
+            const row = make("div", "ocr-form-row");
+            const fieldName = "code-" + pageId;
+            row.appendChild(
+              textField(view, fieldName, "code:" + pageId, String(pageField(page, "code") || code),
+                "Code on this page", "e.g. B1-12", `Batch code on ${caption}`,
+                () => setPageCode(view, pageId, fieldName))
+            );
+            addButton(view, row, "Set code", "ocr-btn secondary", `Set the batch code of ${caption}`,
+              () => setPageCode(view, pageId, fieldName));
+            figure.appendChild(row);
+          }
           scans.appendChild(figure);
         });
         el.appendChild(scans);
@@ -2891,6 +3091,13 @@
         addButton(view, form, "Check ID", "ocr-btn secondary", `Look up the Student ID for ${code}`, look);
         addButton(view, form, "Confirm and upload", "ocr-btn primary", `Confirm and upload ${code}`,
           () => confirmDocument(view));
+        // A Declaration page attached by hand can be taken off again: it
+        // goes back under Unsorted.
+        const attached = pages.slice(1).find((page) => pageField(page, "declaration_by"));
+        if (attached) {
+          addButton(view, form, "Take off the Declaration page", "ocr-btn secondary",
+            `Take the Declaration page off ${code}`, () => attachDeclaration(view, pageIdOf(attached), ""));
+        }
         el.appendChild(form);
         // A changed ID typed before this redraw.
         paintWho(view);
@@ -2907,9 +3114,12 @@
         el.appendChild(form);
       } else if (status === "uploaded") {
         const folder = String(doc.drive_folder || outcome.folder || "");
+        const where = folder ? `your Drive, in ${folder}` : "your Drive";
         const done = make(
           "p", "ocr-doc-done",
-          folder ? `Saved and uploaded to your Drive, in ${folder}. ` : "Saved and uploaded to your Drive. "
+          automatic
+            ? `Its Student ID matched exactly, so it was uploaded automatically to ${where}. `
+            : `Saved and uploaded to ${where}. `
         );
         const link = driveLink(doc) || outcome.link || "";
         if (link) done.appendChild(makeLink("Open the PDF in Drive", "ocr-link", link));
@@ -2925,7 +3135,24 @@
       return JSON.stringify([
         pageStatus(page), pageField(page, "code") || "", pageField(page, "student_id") || "",
         pageField(page, "message") || "", pageField(page, "blank") === true, matchOf(page),
+        declarationsOf(page).map((entry) => [pageIdOf(entry), pageField(entry, "declaration_by") || ""]),
+        attachTarget(page),
       ]);
+    }
+
+    // Without batch codes, the Declaration page of the form an Unsorted
+    // page begins: shown on its card, and one document with it once its
+    // Student ID is typed.
+    function declarationsOf(page) {
+      return listOf(pageField(page, "declaration_pages"));
+    }
+
+    // Without batch codes, the form straight before an Unsorted page that it
+    // may be the Declaration page of - one the reader missed: { page_id,
+    // student_name }, or null.
+    function attachTarget(page) {
+      const target = pageField(page, "attach_to");
+      return target && typeof target === "object" && target.page_id ? target : null;
     }
 
     function pageView(page) {
@@ -2946,12 +3173,15 @@
       const message = String(pageField(page, "message") || "");
       // A page with next to no ink. Typing an ID against it would file an
       // empty image as the student's form (#7), so it only shows the scan.
+      // A declaration page or an empty Student ID line is skipped too, but
+      // keeps its boxes: the skip may have been wrong.
       const skipReason = String(pageField(page, "skip_reason") || "");
       const blank = skipReason === "blank" || pageField(page, "blank") === true || /looks blank/i.test(message);
       const skipped = Boolean(skipReason) || blank;
       const failed = pageStatus(page) === "failed";
       const id = String(pageField(page, "student_id") || "");
       const match = matchOf(page);
+      const declarations = declarationsOf(page);
       const view = newView(pageId, sig, caption, "page:" + pageId);
       view.page = page;
       const el = make("li", "ocr-doc ocr-page is-" + (skipped ? "blank" : failed ? "failed" : "attention"));
@@ -2963,11 +3193,13 @@
           : "Looks blank";
 
       const head = make("div", "ocr-doc-head");
-      head.appendChild(make("span", "ocr-doc-code", "No code"));
-      head.appendChild(make("span", "ocr-doc-parts", caption));
+      head.appendChild(make("span", "ocr-doc-code", BATCH_CODES ? "No code" : "No Student ID"));
+      head.appendChild(
+        make("span", "ocr-doc-parts", declarations.length ? `${caption} + Declaration page` : caption)
+      );
       head.appendChild(
         make("span", "ocr-pill is-" + (skipped ? "blank" : "attention"),
-          skipped ? skipLabel : failed ? "OCR failed" : "Needs a batch code")
+          skipped ? skipLabel : failed ? "OCR failed" : BATCH_CODES ? "Needs a batch code" : "Needs a Student ID")
       );
       el.appendChild(head);
 
@@ -2977,27 +3209,59 @@
       el.appendChild(make("p", "ocr-doc-student", who));
       el.appendChild(
         make("p", "ocr-doc-reason",
-          message || "No batch code was read from the top-right corner - type it as written, such as B1-12.")
+          message || (BATCH_CODES
+            ? "No batch code was read from the top-right corner - type it as written, such as B1-12."
+            : "No Student ID was read - type it from the scan below."))
       );
       el.appendChild(scanFigure(view, pageId, caption));
-
-      if (!skipped) {
-        const codeRow = make("div", "ocr-form-row");
-        codeRow.appendChild(
-          textField(view, "code", "code:" + pageId, String(pageField(page, "code") || ""),
-            "Batch code", "e.g. B1-12", `Batch code for ${caption}`, () => setPageCode(view, pageId, "code"))
+      if (declarations.length) {
+        // The rest of its form, which needs no ID of its own.
+        el.appendChild(
+          make("p", "ocr-doc-reason",
+            "Its Declaration page came after it - once the Student ID is typed, both are one document.")
         );
-        addButton(view, codeRow, "Set code", "ocr-btn primary", `Set the batch code for ${caption}`,
-          () => setPageCode(view, pageId, "code"));
-        el.appendChild(codeRow);
+        el.appendChild(thumbStrip(view, [page, ...declarations], caption));
+      }
+
+      if (!blank) {
+        // Without batch codes the Student ID is all a page needs: typed in,
+        // the page - with its Declaration page - becomes a document of its own.
+        if (BATCH_CODES) {
+          const codeRow = make("div", "ocr-form-row");
+          codeRow.appendChild(
+            textField(view, "code", "code:" + pageId, String(pageField(page, "code") || ""),
+              "Batch code", "e.g. B1-12", `Batch code for ${caption}`, () => setPageCode(view, pageId, "code"))
+          );
+          addButton(view, codeRow, "Set code", "ocr-btn primary", `Set the batch code for ${caption}`,
+            () => setPageCode(view, pageId, "code"));
+          el.appendChild(codeRow);
+        }
         const idRow = make("div", "ocr-form-row");
         idRow.appendChild(
           textField(view, "id", "pid:" + pageId, (match && match.student_id) || id,
             "Student ID", "e.g. MOHSHA011021", `Student ID for ${caption}`, () => checkPageId(view, pageId))
         );
-        addButton(view, idRow, "Check ID", "ocr-btn secondary", `Look up the Student ID for ${caption}`,
-          () => checkPageId(view, pageId));
+        addButton(view, idRow, "Check ID", BATCH_CODES ? "ocr-btn secondary" : "ocr-btn primary",
+          `Look up the Student ID for ${caption}`, () => checkPageId(view, pageId));
+        // A Declaration page attached to it by hand can be taken off again,
+        // as on a form's card: it goes back under Unsorted.
+        const attached = declarations.find((entry) => pageField(entry, "declaration_by"));
+        if (attached) {
+          addButton(view, idRow, "Take off the Declaration page", "ocr-btn secondary",
+            `Take the Declaration page off ${caption}`, () => attachDeclaration(view, pageIdOf(attached), ""));
+        }
         el.appendChild(idRow);
+        // A Declaration page the reader took for a page with no Student ID,
+        // straight after a form that has none: a person can say which it is.
+        const target = attachTarget(page);
+        if (target) {
+          const whose = String(target.student_name || "") || "the form before it";
+          const attachRow = make("div", "ocr-form-row");
+          addButton(view, attachRow, `Attach as the Declaration page of ${whose}`, "ocr-btn secondary",
+            `Attach ${caption} as the Declaration page of ${whose}`,
+            () => attachDeclaration(view, pageId, String(target.page_id)));
+          el.appendChild(attachRow);
+        }
       }
 
       addMessage(view);
@@ -3088,6 +3352,8 @@
     // it - the key it is filed under now, and its Drive folder.
     function settleDocument(view, status, link, error, answered) {
       const filed = answered && typeof answered === "object" ? answered : {};
+      // view.automatic: this page confirmed it by itself just now.
+      const automatic = filed.confirmed_automatically === true || view.automatic === true;
       results.outcomes.set(view.key, {
         status,
         link: link || "",
@@ -3095,16 +3361,19 @@
         error: error || "",
         key: (filed.key && String(filed.key)) || view.retryKey || view.key,
         pages: pagesOf(view.doc).map(pageIdOf).join(" "),
+        automatic,
       });
       results.drafts.delete("id:" + view.key);
       results.notes.delete(view.noteKey);
       view.busy = false;
       view.sig = "";
-      announce(
-        status === "uploaded"
-          ? `${view.code} saved and uploaded to your Drive.`
-          : `${view.code} saved, but the upload to Drive did not finish - press Retry upload.`
-      );
+      if (status === "uploaded") {
+        announce(view.automatic
+          ? `${view.code} matched exactly and was uploaded to your Drive automatically.`
+          : `${view.code} saved and uploaded to your Drive.`);
+      } else {
+        announce(`${view.code} saved, but the upload to Drive did not finish - press Retry upload.`);
+      }
       paintResults();
       // Its code is settled now, so its scans can go into their batch folder.
       requestSort();
@@ -3112,10 +3381,12 @@
 
     // The only write this page makes for a scanned form: the Student ID as
     // the person confirmed it, for this one document. Sent once - the
-    // buttons stay disabled until the server has answered.
-    async function confirmDocument(view) {
+    // buttons stay disabled until the server has answered. automatic: the
+    // page is confirming it by itself (uploadMatchedDocuments), for the
+    // student the server matched exactly - the server checks that again.
+    async function confirmDocument(view, automatic) {
       if (view.busy) return;
-      const value = typed(view, "id");
+      const value = automatic ? view.matchId : typed(view, "id");
       if (!value) {
         say(view, "Type the Student ID from the form first.", "error");
         if (view.fields.id) view.fields.id.focus();
@@ -3126,14 +3397,19 @@
         say(view, `${value} is not the student this card shows - press Check ID to see who it is, then confirm.`, "error");
         return;
       }
+      const body = { student_id: value, page_ids: pagesOf(view.doc).map(pageIdOf).filter(Boolean) };
+      if (automatic) body.automatic = true;
+      view.automatic = Boolean(automatic);
       setBusy(view, true);
-      say(view, `Saving ${value} and uploading to your Drive…`, "pending");
+      say(view, automatic
+        ? `${value} matched exactly - uploading it to your Drive automatically…`
+        : `Saving ${value} and uploading to your Drive…`, "pending");
       try {
         let response;
         try {
           response = await fetch(
             `${API_BASE}/api/documents/${encodeURIComponent(view.key)}/confirm`,
-            { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ student_id: value, page_ids: pagesOf(view.doc).map(pageIdOf).filter(Boolean) }) }
+            { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(body) }
           );
         } catch (_) {
           throw new Error(
@@ -3149,14 +3425,118 @@
           settleDocument(view, "uploaded", link, "", doc);
         } else if (state === "confirmed") {
           settleDocument(view, "confirmed", "", data.error || data.message || "", doc);
+          // Saved without its PDF. The next would most likely go the same
+          // way - a Google sign-in that has run out, say - each one marking
+          // a child with no form in Drive, so none is tried.
+          if (automatic) stopAutoUpload(`${view.code} was saved, but Drive did not take its PDF - press Retry upload on it.`);
         } else {
           throw new Error(confirmError(response.status, data));
         }
       } catch (error) {
         setBusy(view, false);
-        say(view, error.message, "error");
+        say(view, automatic ? notAutomatic(error.message) : error.message, "error");
+        // No other document would get further this visit without it.
+        if (automatic && /sign in with google/i.test(error.message)) {
+          stopAutoUpload("Drive needs you to sign in with Google.");
+        }
       }
       refreshResults();
+    }
+
+    // ---- documents that go up by themselves --------------------------------------
+    // With Upload matched pages automatically on, a document the server lists
+    // as auto_upload - Ready, its Student ID exactly a student at the one
+    // school picked, every page sent with the switch on, and without batch
+    // codes its one Declaration page, recognised by the reader, scanned
+    // straight after it - is confirmed here without anyone pressing the
+    // button. It is the same confirm, made from this page because the PDF
+    // goes to this person's Drive. One at a time,
+    // and each document once a visit: whatever stops it - the server saying
+    // no, the database down, Drive failing, a sign-in problem - leaves it on
+    // its card for a person to Confirm or Retry upload, and it is not tried
+    // again by itself. A sign-in problem or a Drive failure stops the rest
+    // too, for this visit: each would be refused, or saved without its PDF.
+    // The server checks everything again and refuses a stale one, and its
+    // lock refuses a second tab's.
+    const autoUpload = {
+      tried: new Set(),     // document keys confirmed by the page, or tried, this visit
+      running: false,
+      stopped: false,       // a sign-in problem or a Drive failure: none is tried this visit
+    };
+    const autoUploadStopped = document.getElementById("auto-upload-stopped");
+
+    // Under the switch, so it is plain why Ready documents wait for a person.
+    function stopAutoUpload(why) {
+      autoUpload.stopped = true;
+      setLine(autoUploadStopped, `Automatic upload stopped for this visit. ${why} Reload the page to start it again.`);
+      autoUploadStopped.hidden = false;
+    }
+
+    // Scans this page still has to send or to see read: waiting to be sent
+    // or held for a retry, in the scan folder and not settled yet, sent
+    // since the last answer, or waiting for OCR.
+    function scansStillComing() {
+      if (sendQueue.length > 0 || watch.inFlight.size > 0) return true;
+      if (watch.polling && !watch.elsewhere) {
+        for (const [name, seen] of watch.seen) {
+          const file = { name, size: seen.size, lastModified: seen.lastModified };
+          if (seen.size && !watch.sent.has(sentKey(watch.folder, file))) return true;
+        }
+      }
+      if (results.sent > results.answered) return true;
+      const queue = (results.data || {}).queue || {};
+      return (Number(queue.queued) || 0) + (Number(queue.reading) || 0) > 0;
+    }
+
+    function nextAutoDocument() {
+      if (autoUpload.stopped || !autoUploadOn()) return null;
+      // A form's later parts - or, without batch codes, the sheet after its
+      // Declaration page, which may be one out of place that holds it - may
+      // still be on their way from this page. Nothing goes up by itself
+      // until they are in and read, or a form could be filed without its
+      // last part, or with another child's Declaration page.
+      if (scansStillComing()) return null;
+      for (const batch of listOf((results.data || {}).batches)) {
+        for (const doc of listOf(batch.documents)) {
+          const key = docKey(doc);
+          if (doc.auto_upload !== true || doc.can_confirm === false || autoUpload.tried.has(key)) continue;
+          if (effectiveStatus(doc) !== "ready") continue;
+          // Without batch codes a form goes up by itself only as the reader
+          // put it together - its Student ID page and the one Declaration
+          // page it recognised after it - with nothing on it to check: never
+          // a Student ID page alone, a form whose Declaration page was
+          // attached by hand, one with two, or one of a stack with a
+          // Declaration page out of place. The server says the same; this
+          // page checks it too.
+          if (!BATCH_CODES && !(pagesOf(doc).length === 2 && readAsDeclaration(pagesOf(doc)[1]))) continue;
+          if (!BATCH_CODES && listOf(doc.attention).length) continue;
+          const view = results.docViews.get(key);
+          // A card someone is busy with, or whose box no longer holds the ID
+          // matched - another typed in, or emptied to type one - is theirs.
+          if (!view || view.busy || !view.matchId || typed(view, "id") !== view.matchId) continue;
+          return view;
+        }
+      }
+      return null;
+    }
+
+    async function uploadMatchedDocuments() {
+      if (autoUpload.running) return;
+      autoUpload.running = true;
+      try {
+        for (let view = nextAutoDocument(); view; view = nextAutoDocument()) {
+          autoUpload.tried.add(view.key);
+          await confirmDocument(view, true);
+        }
+      } finally {
+        autoUpload.running = false;
+      }
+    }
+
+    // What a card says when it did not go up by itself: why, and that it now
+    // waits for a person.
+    function notAutomatic(text) {
+      return /automatically/i.test(text) ? text : `Not uploaded automatically: ${text}`;
     }
 
     async function retryUpload(view) {
@@ -3177,7 +3557,9 @@
 
     // Puts the typed ID on the parts that were read differently (or on the
     // first, to look it up again) - nothing is saved, the server only looks
-    // the student up, and the card then shows who it found.
+    // the student up, and the card then shows who it found. Without batch
+    // codes only the form's Student ID page takes it: its Declaration page
+    // has no ID, and one typed on it would take it out of the form.
     async function checkDocumentId(view) {
       if (view.busy) return;
       const value = typed(view, "id");
@@ -3189,7 +3571,7 @@
       const differ = parts.filter(
         (page) => String(pageField(page, "student_id") || "").toUpperCase() !== value
       );
-      const targets = differ.length ? differ : parts.slice(0, 1);
+      const targets = BATCH_CODES && differ.length ? differ : parts.slice(0, 1);
       setBusy(view, true);
       say(view, `Looking up ${value}…`, "pending");
       try {
@@ -3216,13 +3598,47 @@
       say(view, `Looking up ${value}…`, "pending");
       try {
         await postJson(`/api/pages/${encodeURIComponent(pageId)}/student-id`, { student_id: value });
-        say(view, `Looked up ${value} - type the batch code too, to put the page in its document.`, "ok");
+        let said = `Looked up ${value} - the page becomes a document of its own in a moment.`;
+        if (BATCH_CODES) said = `Looked up ${value} - type the batch code too, to put the page in its document.`;
+        else if (declarationsOf(view.page).length) {
+          said = `Looked up ${value} - the page and its Declaration page become one document in a moment.`;
+        }
+        say(view, said, "ok");
       } catch (error) {
         say(view, error.message, "error");
       } finally {
         setBusy(view, false);
       }
       refreshResults();
+    }
+
+    // Without batch codes: says a page is the Declaration page of the form
+    // straight before it (of: that form's first page), or with of "" takes
+    // that back. Only the person's word is kept; the form still waits for
+    // Confirm, and never goes up by itself.
+    async function attachDeclaration(view, pageId, of) {
+      if (view.busy) return;
+      setBusy(view, true);
+      say(view, of ? "Attaching it to the form before it…" : "Taking the Declaration page off…", "pending");
+      try {
+        await postJson(`/api/pages/${encodeURIComponent(pageId)}/declaration`, { of });
+        say(view, of ? attachedText(of) : "Taken off - the page goes back under Unsorted in a moment.", "ok");
+      } catch (error) {
+        say(view, error.message, "error");
+      } finally {
+        setBusy(view, false);
+      }
+      refreshResults();
+    }
+
+    // What attaching a page to the form whose first page is `of` comes to:
+    // one document at once when that page has its Student ID - a form's
+    // card - and otherwise once its Student ID is typed under Unsorted.
+    function attachedText(of) {
+      const known = results.index.get(of);
+      return known && known.doc
+        ? "Attached - the two become one document in a moment, for you to confirm."
+        : "Attached - type the Student ID of the page before it, and the two become one document.";
     }
 
     async function setPageCode(view, pageId, fieldName) {

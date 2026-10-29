@@ -159,6 +159,8 @@ def find_student_by_id(
     mark_scanned: bool | None = None,
     school: str | None = None,
     location: str | None = None,
+    exact_only: bool = False,
+    unscanned_only: bool = False,
 ) -> dict[str, Any] | None:
     """
     Find an active student by Student ID.
@@ -171,6 +173,16 @@ def find_student_by_id(
     mark_scanned overrides MARK_SCANNED_ON_LOOKUP for this call — pass
     False for a read-only preview (e.g. before the user confirms the OCR
     result), and True once the user has confirmed it's correct.
+
+    exact_only stops after 1): a document confirmed with nobody looking
+    (the scan page's automatic upload) takes the student only as written,
+    since every later step is a guess at which near ID was meant.
+
+    unscanned_only marks the student only while scanned_at is still empty,
+    for the same automatic upload: a child already marked scanned - by an
+    earlier form, perhaps another person's, or by a confirm running at the
+    same moment - is left as they are, and comes back with already_scanned
+    set. A second form for one child is for a person to look at.
     """
     should_mark = MARK_SCANNED_ON_LOOKUP if mark_scanned is None else mark_scanned
     cleaned = re.sub(r"[^A-Za-z0-9]", "", (student_id or "")).upper().strip()
@@ -192,6 +204,10 @@ def find_student_by_id(
         with conn.cursor() as cur:
             row = _exact_lookup(cur, cleaned, scope=scope)
             matched_via = "exact"
+
+            if row is None and exact_only:
+                debug_log(f"[DB] RESULT: NOT FOUND for {cleaned!r} (exact match only)")
+                return None
 
             if row is None:
                 # Fix the reading against the known 6-letter/6-digit shape
@@ -241,6 +257,10 @@ def find_student_by_id(
                 f"name={row.get('student_name')!r} (ocr_input={student_id!r})"
             )
 
+            if should_mark and unscanned_only and row.get("scanned_at") is not None:
+                debug_log(f"[DB] {matched_id!r} is already marked scanned - left as it is")
+                return dict(_serialize_student(row), already_scanned=True)
+
             if should_mark:
                 # Bound from the IST clock rather than SQL NOW(), which reads
                 # the session's zone - UTC by default on RDS. That keeps
@@ -253,16 +273,22 @@ def find_student_by_id(
                 # (a few are held by two children in different schools), and
                 # the lookup picked this one by its school.
                 school_clause, school_params = _same_school_clause(row.get("school_name"))
+                # unscanned_only: in the UPDATE itself as well, so of two
+                # confirms at once only one marks the child.
+                unmarked = " AND scanned_at IS NULL" if unscanned_only else ""
                 cur.execute(
                     f"""
                     UPDATE {STUDENT_TABLE}
                     SET scanned_at = %s
                     WHERE student_id = %s
-                      AND {school_clause}
+                      AND {school_clause}{unmarked}
                     """,
                     (now_ist(), matched_id, *school_params),
                 )
                 conn.commit()
+                if unscanned_only and not cur.rowcount:
+                    debug_log(f"[DB] {matched_id!r} was marked scanned meanwhile - left as it is")
+                    return dict(_serialize_student(row), already_scanned=True)
                 debug_log(f"[DB] scanned_at updated for {matched_id!r}")
                 cur.execute(
                     f"""
