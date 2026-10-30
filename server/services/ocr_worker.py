@@ -271,11 +271,14 @@ def read_ocr(meta: scan_queue.PageMeta) -> scan_queue.PageResult:
     The page is tried both ways up and kept the way its form layout matches
     better. A page with no layout to match (the signature page) is kept
     whichever way up its batch code reads; the upside-down try is read by
-    the local recogniser only. An upside-down page has its page.jpg turned
-    round, so the thumbnails and the PDF are upright too.
+    the local recogniser only. A Declaration page whose heading the reader
+    finds only with the page turned round is turned round too, unless a
+    batch code was read in its corner. An upside-down page has its page.jpg
+    turned round, so the thumbnails and the PDF are upright too.
 
     With batch codes off (config.batch_codes_on) the code is not read, and
-    a page with no layout to match is kept as it was scanned.
+    a page with no layout to match is kept as it was scanned - but for a
+    Declaration page found turned round.
     """
     grey = scan_queue.load_page_grey_image(meta.page_id)
     if grey is None:
@@ -325,6 +328,14 @@ def read_ocr(meta: scan_queue.PageMeta) -> scan_queue.PageResult:
     extracted = read_student_id(cv2.cvtColor(work, cv2.COLOR_GRAY2BGR), label)
     if extracted.skipped:
         reason = extracted.skip_reason or "blank"
+        if reason == "declaration" and extracted.orientation == 180 and code.code is None:
+            # Its heading was found only with the page turned round - a sheet
+            # fed upside down - so page.jpg is turned to match, and its
+            # thumbnails and PDF are upright. A batch code read in its
+            # corner has already said which way up it is.
+            grey = cv2.rotate(grey, cv2.ROTATE_180)
+            scan_queue.replace_page_image(meta.page_id, grey)
+            reading = replace(reading, orientation=(reading.orientation + 180) % 360)
         skipped_message = {
             "blank": BLANK_MESSAGE,
             "declaration": "Declaration page, no Student ID.",
@@ -336,6 +347,7 @@ def read_ocr(meta: scan_queue.PageMeta) -> scan_queue.PageResult:
             skip_reason=reason,
             message=skipped_message,
             form_language=extracted.form_language,
+            declaration_side=reason == "declaration" and extracted.declaration_side,
         )
     student_id = extracted.student_id if looks_like_student_id(extracted.student_id) else ""
     return replace(

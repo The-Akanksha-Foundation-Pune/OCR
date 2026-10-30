@@ -4,7 +4,7 @@
     {
       "name": "ocr-dev",
       "runtimeExecutable": "/usr/bin/env",
-      "runtimeArgs": ["PORT=5000", ".venv/bin/python", "run.py"],
+      "runtimeArgs": ["PORT=5000", "LOCAL_OPEN_ACCESS=0", ".venv/bin/python", "run.py"],
       "port": 5000,
       "url": "http://127.0.0.1:5000"
     },

@@ -30,9 +30,14 @@ one before (_runs). Each form is two sheets: the page with its Student ID -
 read by OCR or typed by a person - and the Declaration page scanned
 straight after it, which has none (_pair). The two are one document, keyed
 "P" and the Student ID page's id, and go to Drive as one PDF,
-<Name>_<ID>.pdf, the Student ID page first. A form whose first page has no
-Student ID waits under Unsorted, its Declaration page with it, until one is
-typed. A Declaration page that joins no form waits under Unsorted on its
+<Name>_<ID>.pdf, the Student ID page first. A form printed on both sides of
+one sheet and scanned both sides comes as one file of two pages a sheet, its
+Student ID side and its Declaration side, whose heading is part way down:
+those pair by their places in the file, in either order, the Student ID
+side first in the document and the PDF (_sheets) - unless the file breaks
+that anywhere, when it pairs by scan order like any other. A form whose
+first page has no Student ID waits under Unsorted, its Declaration page with
+it, until one is typed. A Declaration page that joins no form waits under Unsorted on its
 own, and holds every form of its run for a person: the stack may be out of
 order or missing a page. So does a form's first page with no Declaration
 page between it and the next form's (_check_steps), and a held run holds
@@ -55,7 +60,9 @@ same way - and is decided by its whole stack, never by the form alone
 (_judge_stack): none of a stack's forms goes up by itself until the stack
 is finished (nothing new for STACK_SETTLE_MINUTES, every page read),
 clean (Student ID page, Declaration page, by turns from first to last,
-all sent the same way, nothing out of place, nothing corrected by hand)
+all sent the same way, nothing out of place, nothing corrected by hand; of
+files scanned both sides, no sheet that came Declaration side first, no file
+that does not pair into sheets, and no other scans in among them)
 and alone (no other scan page sending for its school around it, no held
 stack before it from its own, nor one for its school from any in the
 HELD_STACK_HOURS before it). It is the same confirm, made in the person's
@@ -171,6 +178,13 @@ _OUT_OF_TURN = "its stack does not go Student ID page, Declaration page, and so 
 _ENDS_WITH_ID = "its stack ends with a Student ID page"
 _ADDED_BY_HAND = "its stack has files added by hand as well as scans from the scan folder"
 _NOT_ALONE = "another computer or tab sent pages for the same school around the same time"
+# ... and of files scanned both sides (_sheets) ...
+_SWAPPED_SHEET = "its stack has a sheet scanned Declaration side first"
+_UNPAIRED_SIDES = (
+    "its stack has a file scanned both sides whose sheets are not each a Student ID side and a"
+    " Declaration side"
+)
+_MIXED_SIDES = "its stack has a file scanned both sides in among other scans"
 # ... or not yet, which may clear by itself as pages are read or time passes.
 _STILL_READING = "a page of its stack is still being read"
 _STILL_STORING = "a scan of yours is still being stored"
@@ -288,6 +302,14 @@ class PageView:
     # Batch codes off: the first page of its stack - its run (_runs) - which
     # names the stack; "" until the pairing has looked.
     stack: str = ""
+    # A Declaration page whose heading the reader found part way down it:
+    # the back of a form printed on both sides of one sheet
+    # (scan_queue.PageResult.declaration_side).
+    declaration_side: bool = False
+    # Batch codes off: one side of a sheet scanned both sides, paired with
+    # its other side by their places in their file (_sheets); False until
+    # the pairing has looked.
+    both_sides: bool = False
     # Batch codes off, under Unsorted: the Declaration page of this page's
     # form, shown with it until its Student ID is typed (_documents_by_page).
     declaration_pages: list[PageView] = field(default_factory=list)
@@ -355,6 +377,9 @@ class PageView:
             data["attach_to"] = (
                 {"page_id": self.attach_to, "student_name": self.attach_name} if self.attach_to else None
             )
+            # One side of a sheet scanned both sides: the page calls the two
+            # its form's Student ID side and Declaration side.
+            data["both_sides"] = self.both_sides
         if image_url is not None:
             data["thumb_url"] = image_url(self.page_id, "thumb")
             data["image_url"] = image_url(self.page_id, "full")
@@ -623,6 +648,7 @@ def load_page_view(
         view.orientation = result.orientation
         view.blank = result.blank
         view.skip_reason = result.skip_reason
+        view.declaration_side = result.declaration_side
     if status == scan_queue.STATUS_FAILED:
         view.message = f"Could not read this page after {meta.attempts} tries. " + (
             "Type its code and Student ID from the image." if codes else "Type its Student ID from the image."
@@ -759,18 +785,21 @@ def _documents_by_page(
 
     A form is its first page and the Declaration page paired with it in its
     run (_pair): one document, keyed by that first page, its parts in scan
-    order. It is one once OCR is done with the first page (read, or failed)
-    and the page has a Student ID, read or typed. A skipped page - a blank
-    page, a declaration page or an empty Student ID line - has none read off
-    it, so it is one only once a person types its ID from the scan: the skip
-    may have been wrong. Every other first page OCR is done with waits under
-    Unsorted for its Student ID, its Declaration page with it rather than on
-    a card of its own, or offered as the Declaration page of the form
-    before it (_offer). A Declaration page of no form waits under Unsorted
-    by itself and says why; one whose page before is still to be read is
-    listed with that page's form once it is. A code read while batch codes
-    were on is not looked at. Each form carries what its whole stack says
-    about going up by itself (_judge_stack).
+    order - for a sheet scanned both sides, its Student ID side first in
+    whichever order the two came (_sheets). It is one once OCR is done with
+    the first page (read, or failed) and the page has a Student ID, read or
+    typed. A skipped page - a blank page, a declaration page or an empty
+    Student ID line - has none read off it, so it is one only once a person
+    types its ID from the scan: the skip may have been wrong. Every other
+    first page OCR is done with waits under Unsorted for its Student ID, its
+    Declaration page with it rather than on a card of its own, or offered as
+    the Declaration page of the form before it (_offer). A Declaration page
+    of no form waits under Unsorted by itself and says why; one whose page
+    before is still to be read is listed with that page's form once it is,
+    as is a side of a sheet scanned both sides once its other side is read.
+    A code read while batch codes were on is not looked at. Each form
+    carries what its whole stack says about going up by itself
+    (_judge_stack).
 
     Args:
         open_views: The person's open pages.
@@ -793,9 +822,10 @@ def _documents_by_page(
     for view in open_views:
         if view.status not in (scan_queue.STATUS_READ, scan_queue.STATUS_FAILED):
             continue
-        if view.page_id in pairing.form_of or view.page_id in pairing.pending:
+        if view.page_id in pairing.form_of or view.page_id in pairing.pending or view.page_id in pairing.waiting:
             # Shown with its form - once the page before it is read, for one
-            # still waiting for that.
+            # still waiting for that, or its sheet's other side, for a side
+            # of a sheet scanned both sides.
             continue
         if view.page_id in pairing.orphans:
             view.message = pairing.orphans[view.page_id]
@@ -816,7 +846,9 @@ def _documents_by_page(
             doc.held = pairing.held.get(number, "")
             doc.stack = verdicts[number]
             if declaration is not None:
-                doc.between = pairing.index_of[declaration.page_id] - at - 1
+                # The two sides of a sheet scanned both sides may come either
+                # way round, with nothing between them.
+                doc.between = abs(pairing.index_of[declaration.page_id] - at) - 1
             _judge_page(doc, done, "" if parts else _waiting_for_declaration(view, run, at, now_ns))
             open_docs.append(doc)
         else:
@@ -931,6 +963,157 @@ class _Pairing:
     # The runs that are held, each with why: ORPHAN_IN_STACK, GAP_IN_STACK
     # or AFTER_HELD_STACK. Every form in one may be paired wrongly.
     held: dict[int, str] = field(default_factory=dict)
+    # A page of a sheet scanned both sides -> its other side, paired by
+    # their places in their file (_sheets).
+    sides: dict[str, PageView] = field(default_factory=dict)
+    # Sides read whose other side is still to be read: not shown yet, and
+    # taken as still being read themselves.
+    waiting: set[str] = field(default_factory=set)
+    # The runs whose files scanned both sides keep every form of them from
+    # going up by itself, each with why (_sheets).
+    sheet_faults: dict[int, str] = field(default_factory=dict)
+
+
+@dataclass
+class _Sheets:
+    """How the files of one run pair by place (batch codes off, _sheets)."""
+
+    sides: dict[str, PageView] = field(default_factory=dict)
+    waiting: set[str] = field(default_factory=set)
+    fault: str = ""
+
+
+# How one file of a run pairs (_file_sheets): by place, every page read
+# (SHEETS) or some still to be read (READING); not by place, as it breaks the
+# rule (BROKEN); or by scan order like any other file (OTHER).
+_SHEETS = "sheets"
+_READING = "reading"
+_BROKEN = "broken"
+_OTHER = "other"
+
+
+def _sheets(run: list[PageView], open_ids: set[str], firsts: set[str]) -> _Sheets:
+    """With batch codes off: pair the two sides of each sheet of a run's files scanned both sides, by place.
+
+    A form printed on both sides of one sheet, scanned both sides, comes in
+    as one file of two pages a sheet - pages 1 and 2, 3 and 4 and so on -
+    one its Student ID side and the other its Declaration side: the back,
+    its heading part way down (PageView.declaration_side). A sheet fed the
+    other way up comes Declaration side first. So once a page of a file of
+    several pages is read as a Declaration side, the file pairs by place,
+    whichever side of each sheet came first (_file_sheets); its other files,
+    and every file of one page, pair by scan order (_pair).
+
+    No form of the run goes up by itself (fault) with a sheet scanned
+    Declaration side first, a file scanned both sides that breaks the rule
+    and so is paired by scan order, or a file scanned both sides in among
+    other scans - a page scanned on its own, or a file with no Declaration
+    side: those wait for a person.
+
+    Args:
+        run: The run, in scan order.
+        open_ids: The open pages; every other is confirmed.
+        firsts: The first page of each confirmed document.
+    """
+    files: dict[tuple[int, str, int, str], list[PageView]] = {}
+    for page in run:
+        files.setdefault((page.received_ns, page.source_name, page.source_pages, page.sender), []).append(page)
+    found = _Sheets()
+    kinds: list[str] = []
+    swapped = False
+    for pages in files.values():
+        kind, sheets, waiting = _file_sheets(pages, open_ids, firsts)
+        kinds.append(kind)
+        for first, declaration in sheets:
+            found.sides[first.page_id] = declaration
+            found.sides[declaration.page_id] = first
+            swapped = swapped or declaration.order < first.order
+        found.waiting.update(page.page_id for page in waiting)
+    # A file of several pages with some still to be read may yet turn out
+    # to be scanned both sides; one of a single page never does.
+    others = [
+        kind == _OTHER and (len(pages) == 1 or not any(page.unread for page in pages))
+        for kind, pages in zip(kinds, files.values())
+    ]
+    if _BROKEN in kinds:
+        found.fault = _UNPAIRED_SIDES
+    elif swapped:
+        found.fault = _SWAPPED_SHEET
+    elif (_SHEETS in kinds or _READING in kinds) and any(others):
+        found.fault = _MIXED_SIDES
+    return found
+
+
+def _file_sheets(
+    pages: list[PageView], open_ids: set[str], firsts: set[str]
+) -> tuple[str, list[tuple[PageView, PageView]], list[PageView]]:
+    """How one file's pages pair (_sheets): its kind, its sheets so far, and the sides waiting for theirs.
+
+    It pairs by place once one of its pages is read as a Declaration side,
+    while it has an even number of pages, all of them in the look, and each
+    sheet read so far is one Student ID side and one Declaration side, both
+    open or both confirmed together - its Student ID side the first page of
+    a confirmed document, its Declaration side not. A side read whose other
+    side is still to be read waits for it. A file that breaks any of that is
+    not paired by place at all: its pages pair by scan order, like any
+    other (_pair).
+
+    Args:
+        pages: The file's pages in the look, in scan order.
+        open_ids: The open pages; every other is confirmed.
+        firsts: The first page of each confirmed document.
+
+    Returns:
+        SHEETS or READING with each sheet as (Student ID side, Declaration
+        side) and the sides waiting; BROKEN or OTHER with neither.
+    """
+    total = pages[0].source_pages
+    if total < 2 or not any(not page.unread and _side_of(page) == "declaration" for page in pages):
+        return _OTHER, [], []
+    if total % 2 or [page.source_page for page in pages] != list(range(1, total + 1)):
+        return _BROKEN, [], []
+    sheets: list[tuple[PageView, PageView]] = []
+    waiting: list[PageView] = []
+    for one, two in zip(pages[::2], pages[1::2]):
+        if one.unread or two.unread:
+            waiting += [page for page in (one, two) if not page.unread]
+            continue
+        sides = {_side_of(one): one, _side_of(two): two}
+        if set(sides) != {"id", "declaration"}:
+            return _BROKEN, [], []
+        first, declaration = sides["id"], sides["declaration"]
+        if (first.page_id in open_ids) != (declaration.page_id in open_ids):
+            return _BROKEN, [], []
+        if first.page_id not in open_ids and (first.page_id not in firsts or declaration.page_id in firsts):
+            return _BROKEN, [], []
+        sheets.append((first, declaration))
+    return (_READING if any(page.unread for page in pages) else _SHEETS), sheets, waiting
+
+
+def _side_of(page: PageView) -> str:
+    """Which side of a sheet scanned both sides a page that has been read is (_file_sheets).
+
+    "declaration" for a Declaration page the reader recognised by its
+    heading part way down, nobody having typed a Student ID on it; "id" for
+    any other page that is neither blank nor a Declaration page - read with
+    a Student ID or not, as a form's first page is in a run (_pair); "" for
+    a blank page, or a Declaration page headed at the top of its own sheet
+    or attached by hand.
+    """
+    if _is_blank(page):
+        return ""
+    if _is_declaration(page):
+        return "declaration" if page.declaration_side and not page.declaration_of else ""
+    return "id"
+
+
+def _in_sheet_order(run: list[PageView], sides: dict[str, PageView]) -> list[PageView]:
+    """A run in scan order, but with each sheet scanned both sides Student ID side first (_sheets)."""
+    pages = list(run)
+    for at in range(len(pages) - 1):
+        if sides.get(pages[at].page_id) is pages[at + 1] and _is_declaration(pages[at]):
+            pages[at], pages[at + 1] = pages[at + 1], pages[at]
+    return pages
 
 
 def _pair(runs: list[list[PageView]], open_ids: set[str], firsts: set[str]) -> _Pairing:
@@ -951,6 +1134,12 @@ def _pair(runs: list[list[PageView]], open_ids: set[str], firsts: set[str]) -> _
     with no Declaration page between it and the next form's (_check_steps),
     and for a held run it may be the rest of (_carry_on).
 
+    The two sides of each sheet of a file scanned both sides pair by their
+    places in the file instead, in either order (_sheets): the Declaration
+    side joins its sheet's Student ID side, and what comes after the sheet
+    comes after a form that has its Declaration page. A side whose other
+    side is still to be read waits, like a page still being read.
+
     Args:
         runs: The person's runs (_runs).
         open_ids: The open pages; every other is confirmed.
@@ -959,12 +1148,26 @@ def _pair(runs: list[list[PageView]], open_ids: set[str], firsts: set[str]) -> _
     pairing = _Pairing()
     for number, run in enumerate(runs):
         _drop_stale_attachments(run, open_ids)
+        sheets = _sheets(run, open_ids, firsts)
+        pairing.sides.update(sheets.sides)
+        pairing.waiting.update(sheets.waiting)
+        if sheets.fault:
+            pairing.sheet_faults[number] = sheets.fault
         before: PageView | None = None  # the last page that is not blank
         for at, page in enumerate(run):
             pairing.run_of[page.page_id] = number
             pairing.index_of[page.page_id] = at
             page.stack = run[0].page_id
-            if page.unread:
+            other = sheets.sides.get(page.page_id)
+            if other is not None:
+                page.both_sides = True
+                declaration, first = (page, other) if _is_declaration(page) else (other, page)
+                if page is declaration and page.page_id in open_ids:
+                    pairing.declaration[first.page_id] = page
+                    pairing.form_of[page.page_id] = first
+                before = declaration
+                continue
+            if page.unread or page.page_id in sheets.waiting:
                 # It may yet be a form's first page.
                 before = page
                 continue
@@ -984,7 +1187,7 @@ def _pair(runs: list[list[PageView]], open_ids: set[str], firsts: set[str]) -> _
                 if page.page_id in firsts:
                     pairing.held[number] = ORPHAN_IN_STACK
                 continue
-            if last is not None and last.unread:
+            if last is not None and (last.unread or last.page_id in sheets.waiting):
                 pairing.pending.add(page.page_id)
                 continue
             why = _no_form(page, last, open_ids)
@@ -1042,7 +1245,9 @@ def _offer(pairing: _Pairing, run: list[PageView], open_ids: set[str]) -> None:
     (set_page_declaration). A page with a Student ID, a blank page, a
     Declaration page, or one with a Declaration page of its own is never
     offered; nor is one straight after a page that is offered itself, which
-    is the likelier Declaration page of the two.
+    is the likelier Declaration page of the two; nor a side of a sheet
+    scanned both sides, or one straight after a side waiting for its other
+    side (_sheets).
     """
     for at in range(1, len(run)):
         page, before = run[at], run[at - 1]
@@ -1053,9 +1258,12 @@ def _offer(pairing: _Pairing, run: list[PageView], open_ids: set[str]) -> None:
             and not _is_blank(page)
             and not _found_declaration(page)
             and page.page_id not in pairing.declaration
+            and page.page_id not in pairing.sides
+            and page.page_id not in pairing.waiting
             and _may_take(before, page, open_ids)
             and before.page_id not in pairing.declaration
             and before.page_id not in pairing.offered
+            and before.page_id not in pairing.waiting
         ):
             pairing.offered[page.page_id] = before
 
@@ -1075,14 +1283,16 @@ def _check_steps(
     (_pair). A page offered as the Declaration page the reader missed
     (_offer) counts as one here, and so does every page but the first of a
     confirmed document. A page still to be read may be anything, so nothing
-    is said across it yet.
+    is said across it yet - nor across a side of a sheet scanned both sides
+    waiting for its other side. Each sheet scanned both sides counts
+    Student ID side first, whichever side came first (_sheets).
     """
     if number in pairing.held:
         return
     before: PageView | None = None  # the last page that is not blank
     blank = False  # a blank page since then
-    for page in run:
-        if page.unread:
+    for page in _in_sheet_order(run, pairing.sides):
+        if page.unread or page.page_id in pairing.waiting:
             before, blank = page, False
             continue
         if _is_blank(page):
@@ -1182,7 +1392,11 @@ def _judge_stacks(
         attached or taken off. A stack fed Declaration page first begins or
         ends with a page out of place, so this alone keeps it back, as well
         as one whose first child returned only the Student ID page, or with
-        a cover sheet on top.
+        a cover sheet on top. A file scanned both sides is clean only as its
+        sheets came, every one Student ID side first, in a stack of nothing
+        but such files: not with a sheet fed the other way up, a file of
+        them that does not pair into sheets, or other scans in among them
+        (_sheets).
       - Alone: no page for the same school and city from any other scan
         page - another computer, another tab, a file added by hand there, an
         older page with no id, a late retry from an old tab - reached the
@@ -1238,10 +1452,13 @@ def _judge_stack(
         return StackVerdict(_HELD_REASONS[pairing.held[number]])
     if any(page.corrected for page in run):
         return StackVerdict(_CORRECTED)
+    if number in pairing.sheet_faults:
+        return StackVerdict(pairing.sheet_faults[number])
     # A page still to be read may be anything: only what has been read is
-    # held against its place.
+    # held against its place - not yet a side whose other side is still to
+    # be read either.
     for at, page in enumerate(run):
-        why = "" if page.unread else _out_of_turn(page, at)
+        why = "" if page.unread or page.page_id in pairing.waiting else _out_of_turn(page, at)
         if why:
             return StackVerdict(why)
     if len({page.sender for page in run}) > 1:
@@ -1883,7 +2100,8 @@ def auto_upload_refusal(doc: Document) -> str:
          DECLARATION_WAIT_SECONDS (later, it had been shown without one),
          from the same scan page (PageMeta.sender, which an older page
          does not send) and the same way, both from its scan folder or
-         both added by hand. And its whole stack qualifies, as of the look
+         both added by hand; for a sheet scanned both sides, its Student
+         ID side came first. And its whole stack qualifies, as of the look
          this document came from (_judge_stack): finished, clean and alone
          - nothing new for STACK_SETTLE_MINUTES, every page read, Student
          ID page and Declaration page by turns from first to last, all sent
@@ -1966,6 +2184,10 @@ def _form_refusal(doc: Document) -> str:
         return "its Declaration page was attached by hand"
     if doc.between:
         return "a page came between its Student ID page and its Declaration page"
+    if first.both_sides and declaration.order < first.order:
+        # A sheet fed the other way up: its two sides are paired by their
+        # places in the file, but a person looks at it first.
+        return "its sheet was scanned Declaration side first"
     if declaration.received_ns - first.received_ns > _DECLARATION_WAIT_NS:
         # It had been shown with no Declaration page by then: the one that
         # came may be the next stack's first sheet, not its own.
