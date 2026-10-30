@@ -19,7 +19,13 @@ from flask import Blueprint, jsonify, render_template, request
 from flask.typing import ResponseReturnValue
 from werkzeug.utils import secure_filename
 
-from server.config import ALLOWED_EXTENSIONS, auto_upload_on, batch_codes_on
+from server.config import (
+    ALLOWED_EXTENSIONS,
+    HELD_STACK_HOURS,
+    STACK_SETTLE_MINUTES,
+    auto_upload_on,
+    batch_codes_on,
+)
 from server.services.auth import require_login
 from server.services.debug_log import debug_log
 from server.services.drive_store import upload_scan_to_drive
@@ -86,12 +92,17 @@ def index() -> str:
     # added by hand) or through the Drive inbox. So nothing here depends on
     # the OS of the server or of the computer the scanner is plugged into.
     # batch_codes: whether the page asks for batch codes and sorts by them.
-    # auto_upload: whether the page offers Upload matched pages automatically.
+    # auto_upload: whether the page offers Upload matched pages automatically;
+    # stack_settle_minutes, how long a stack waits before it goes up by itself,
+    # and held_stack_hours, how long one with a page out of place keeps the
+    # next ones for its school from going up by themselves.
     return render_template(
         "index.html",
         active_page="scanner",
         batch_codes=batch_codes_on(),
         auto_upload=auto_upload_on(),
+        stack_settle_minutes=STACK_SETTLE_MINUTES,
+        held_stack_hours=HELD_STACK_HOURS,
     )
 
 

@@ -2669,6 +2669,15 @@ body.is-busy {
   color: var(--muted);
 }
 
+/* Without batch codes: when a Ready form goes up by itself, or why it waits. */
+.ocr-doc-auto {
+  margin: 0.25rem 0 0;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .ocr-thumbs {
   display: flex;
   flex-wrap: wrap;

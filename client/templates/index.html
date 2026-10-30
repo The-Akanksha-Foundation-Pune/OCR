@@ -51,8 +51,9 @@
         pages automatically</strong> on and one school picked, a Ready document
         whose Student ID is exactly one of that school's students, not yet marked
         scanned, is confirmed and uploaded by itself{% if not batch_codes %} once its
-        Declaration page, scanned straight after it, and the page after that have
-        been read{% endif %}{% endif %}.</p>
+        whole stack has come in clean - each form's Student ID page, then its
+        Declaration page, nothing out of place or corrected by hand - and nothing
+        more has come for {{ stack_settle_minutes }} minutes{% endif %}{% endif %}.</p>
     </header>
 
     <section class="panel" aria-label="Upload scan">
@@ -96,16 +97,20 @@
           </div>
           <p class="school-hint" id="auto-upload-hint"{% if not auto_upload %} hidden{% endif %}>
             Only with one school picked, not a whole city: a document whose
-            Student ID - read or typed - is exactly one of that school's
+            Student ID - {% if batch_codes %}read or typed{% else %}as read{% endif %} - is exactly one of that school's
             students is confirmed and uploaded to your Drive without pressing
-            Confirm{% if not batch_codes %}, once its one Declaration page, scanned
-            straight after it on this computer within a few minutes, has been
-            read - and so has the next form's Student ID page after it, or nothing
-            has come for a couple of minutes{% endif %}. A near match, no match, a student already marked scanned,
+            Confirm{% if not batch_codes %} - but only once its whole stack, as this
+            computer sent it, is in: Student ID page, Declaration page, by turns from
+            first to last, every page read, and nothing more from this computer or
+            any other for that school for {{ stack_settle_minutes }} minutes - and only while this
+            page is open on screen, as it is this page that does it. Each Ready card
+            says when it goes up, or why it waits{% endif %}. A near match, no match, a student already marked scanned,
             {% if not batch_codes %}a Student ID page with no Declaration page straight
-            after it, a Declaration page you attached by hand, a form with one sheet
-            from the scan folder and one added by hand, a stack with a page out of
-            place,
+            after it, a stack with a page out of place, blank or unreadable, a Student
+            ID you typed or a Declaration page you attached or took off, files added
+            by hand in among what the scan folder sent, another computer or tab
+            scanning for the same school at the same time, a stack for a school in the
+            {{ held_stack_hours }} hours after one of its stacks had a page out of place,
             {% endif %}or anything that needs checking still waits for you.
           </p>
           <p class="school-hint" id="auto-upload-stopped" role="status" hidden></p>
@@ -308,12 +313,15 @@
         after it; a Declaration page the reader missed can be attached there to the
         form straight before it.{% endif %} Check each
         document and press <strong>Confirm and upload</strong> - until then nothing is
-        saved, and nothing goes to Drive. The one exception, with <strong>Upload
+        saved, and nothing goes to Drive.{% if auto_upload %} The one exception, with <strong>Upload
         matched pages automatically</strong> on: a Ready document scanned for one
         school whose Student ID is exactly a student there - one not yet marked
-        scanned, with no other document for them{% if not batch_codes %}, and its
-        Declaration page read straight after it, then the page after that{% endif %} - is confirmed and uploaded by
-        itself, and says so; every other document still waits for you. Confirmed
+        scanned, with no other document for them{% if not batch_codes %}, in a stack
+        that came in whole and clean, Student ID page and Declaration page by turns
+        with nothing out of place, nothing corrected by hand and no other computer
+        scanning for the school, and has had nothing more for {{ stack_settle_minutes }} minutes{% endif %} - is
+        confirmed and uploaded by itself{% if not batch_codes %} while this page is open on screen{% endif %}, and
+        says so; every other document still waits for you.{% endif %} Confirmed
         documents go to your Google Drive under OCR / School / Grade / Division, and
         are listed in <a href="{{ url_for('history.history_page') }}">History</a>.
       </p>
@@ -364,8 +372,9 @@
               the scan, so the ID{% if batch_codes %} or code{% endif %} can be typed from it.{% if auto_upload %} With
               Upload matched pages automatically on, an exact match at the
               school picked, for a student not yet marked scanned, goes up by
-              itself{% if not batch_codes %} once its Declaration page, scanned
-              straight after it, and the page after that have been read{% endif %}.{% endif %}
+              itself{% if not batch_codes %} once its whole stack is in clean and
+              nothing more has come for {{ stack_settle_minutes }} minutes, while this page is
+              open on screen{% endif %}.{% endif %}
             </p>
           </div>
         </div>
@@ -829,6 +838,8 @@
 
     autoUploadToggle.addEventListener("change", () => {
       remember(AUTO_UPLOAD_KEY, autoUploadOn() ? "on" : "off");
+      // What each card says about going up by itself goes with the switch.
+      if (results.data) paintResults();
       // On again: what was sent with it on, and not tried yet, goes now -
       // and, without batch codes, a form whose stack is still settling is
       // looked at again until it may.
@@ -2574,8 +2585,8 @@
     // Anything still to come: a scan sent since the last answer was asked
     // for, a page queued or being read, a document waiting for a part - or,
     // while this page uploads by itself, a form that may go up once its
-    // stack has settled (auto_upload_pending): with nothing after its
-    // Declaration page, only time can tell.
+    // stack has finished (auto_upload_pending): only its last pages being
+    // read, and time with nothing new, can tell.
     function resultsUnfinished() {
       if (results.sent > results.answered) return true;
       const data = results.data;
@@ -2654,6 +2665,9 @@
     function showResults(data) {
       results.data = data;
       results.index = indexPages(data);
+      // A fresh look: a document refused only for now may be asked for again.
+      autoUpload.again.forEach((key) => autoUpload.tried.delete(key));
+      autoUpload.again.clear();
       paintResults();
       paintReceived();
       requestSort();
@@ -2813,7 +2827,10 @@
       const key = docKey(doc);
       const known = results.docViews.get(key);
       const sig = docSignature(doc);
-      if (keepView(known, sig)) return known;
+      if (keepView(known, sig)) {
+        paintAuto(known, doc);
+        return known;
+      }
       const view = buildDocView(doc, sig);
       results.docViews.set(key, view);
       return view;
@@ -3047,6 +3064,13 @@
       } else if (SHOW_SCAN.has(status)) {
         el.appendChild(make("p", "ocr-doc-reason", attentionReason(doc, status, id, match)));
       }
+      // Without batch codes, when a Ready form goes up by itself as its stack
+      // stands, or why it waits - kept up to date in place (paintAuto).
+      if (status === "ready" && !BATCH_CODES) {
+        view.auto = make("p", "ocr-doc-auto", "");
+        el.appendChild(view.auto);
+        paintAuto(view, doc);
+      }
 
       el.appendChild(thumbStrip(view, pages, code));
 
@@ -3090,7 +3114,10 @@
           textField(view, "id", "id:" + key, id, "Student ID", "e.g. MOHSHA011021",
             `Student ID for ${code}`, look)
         );
-        view.fields.id.addEventListener("input", () => paintWho(view));
+        view.fields.id.addEventListener("input", () => {
+          paintWho(view);
+          paintAuto(view);
+        });
         addButton(view, form, "Check ID", "ocr-btn secondary", `Look up the Student ID for ${code}`, look);
         addButton(view, form, "Confirm and upload", "ocr-btn primary", `Confirm and upload ${code}`,
           () => confirmDocument(view));
@@ -3104,6 +3131,7 @@
         el.appendChild(form);
         // A changed ID typed before this redraw.
         paintWho(view);
+        paintAuto(view);
       } else if (status === "confirmed") {
         const note = make(
           "p", "ocr-doc-done is-warn",
@@ -3433,11 +3461,20 @@
           // a child with no form in Drive, so none is tried.
           if (automatic) stopAutoUpload(`${view.code} was saved, but Drive did not take its PDF - press Retry upload on it.`);
         } else {
-          throw new Error(confirmError(response.status, data));
+          const refused = new Error(confirmError(response.status, data));
+          // Refused only for now - its stack not finished after all, a scan
+          // still being stored - so asked for again on a later look.
+          refused.pending = Boolean(automatic) && data.pending === true;
+          throw refused;
         }
       } catch (error) {
         setBusy(view, false);
-        say(view, automatic ? notAutomatic(error.message) : error.message, "error");
+        if (error.pending) {
+          autoUpload.again.add(view.key);
+          say(view, error.message, "pending");
+        } else {
+          say(view, automatic ? notAutomatic(error.message) : error.message, "error");
+        }
         // No other document would get further this visit without it.
         if (automatic && /sign in with google/i.test(error.message)) {
           stopAutoUpload("Drive needs you to sign in with Google.");
@@ -3451,18 +3488,25 @@
     // as auto_upload - Ready, its Student ID exactly a student at the one
     // school picked, every page sent with the switch on, and without batch
     // codes its one Declaration page, recognised by the reader, scanned
-    // straight after it - is confirmed here without anyone pressing the
-    // button. It is the same confirm, made from this page because the PDF
-    // goes to this person's Drive. One at a time,
+    // straight after it, in a stack that has finished clean with no other
+    // scan page beside it - is confirmed here without anyone pressing the
+    // button. Only the server says which, and when: this page never asks for
+    // one the server has not listed so, and checks what it can again. It is
+    // the same confirm, made from this page because the PDF goes to this
+    // person's Drive. One at a time,
     // and each document once a visit: whatever stops it - the server saying
     // no, the database down, Drive failing, a sign-in problem - leaves it on
     // its card for a person to Confirm or Retry upload, and it is not tried
-    // again by itself. A sign-in problem or a Drive failure stops the rest
-    // too, for this visit: each would be refused, or saved without its PDF.
-    // The server checks everything again and refuses a stale one, and its
-    // lock refuses a second tab's.
+    // again by itself. Only a refusal the server says is for now (pending:
+    // its stack still to finish after all, a scan still being stored) is
+    // asked for again, on a later look. A sign-in problem or a Drive failure
+    // stops the rest too, for this visit: each would be refused, or saved
+    // without its PDF. The server checks everything again and refuses a
+    // stale one, and its lock refuses a second tab's. It is this page that
+    // asks, so only while it is open on screen: a hidden tab does not look.
     const autoUpload = {
       tried: new Set(),     // document keys confirmed by the page, or tried, this visit
+      again: new Set(),     // tried and refused only for now: asked for again on the next look
       running: false,
       stopped: false,       // a sign-in problem or a Drive failure: none is tried this visit
     };
@@ -3493,11 +3537,11 @@
 
     function nextAutoDocument() {
       if (autoUpload.stopped || !autoUploadOn()) return null;
-      // A form's later parts - or, without batch codes, the sheet after its
-      // Declaration page, which may be one out of place that holds it - may
-      // still be on their way from this page. Nothing goes up by itself
-      // until they are in and read, or a form could be filed without its
-      // last part, or with another child's Declaration page.
+      // A form's later parts - or, without batch codes, the rest of its
+      // stack, which may have a page out of place that holds it - may still
+      // be on their way from this page. Nothing goes up by itself until they
+      // are in and read, or a form could be filed without its last part, or
+      // with another child's Declaration page.
       if (scansStillComing()) return null;
       for (const batch of listOf((results.data || {}).batches)) {
         for (const doc of listOf(batch.documents)) {
@@ -3521,6 +3565,43 @@
         }
       }
       return null;
+    }
+
+    // Without batch codes, what a Ready card says about going up by itself
+    // while this page uploads by itself, as the server says it: when it goes
+    // up if nothing else comes (auto_upload_at, given only while time is all
+    // its stack waits for) - this page does it, so only while it is open on
+    // screen - or the one reason it waits, for now or for a person
+    // (auto_upload_refusal). Nothing for one going up now, or when nothing
+    // goes up by itself on this visit; and no promise for one this page
+    // leaves alone: tried once already, or with another ID in its box.
+    function autoUploadLine(doc, view) {
+      if (BATCH_CODES || !autoUploadOn() || autoUpload.stopped || doc.auto_upload === true) return "";
+      if (view && autoUpload.tried.has(view.key) && !autoUpload.again.has(view.key)) return "";
+      if (view && view.matchId && view.fields.id && typed(view, "id") !== view.matchId) {
+        return "Waits for you: its Student ID box no longer holds the ID matched.";
+      }
+      const why = String(doc.auto_upload_refusal || "");
+      if (doc.auto_upload_pending === true) {
+        if (doc.auto_upload_at) {
+          return `Goes up by itself at ${stampTime(doc.auto_upload_at)} if nothing else comes`
+            + " and this page is still open on screen.";
+        }
+        return why ? `Not yet: ${why}.` : "";
+      }
+      return why ? `Waits for you: ${why}.` : "";
+    }
+
+    // The card's line about going up by itself (autoUploadLine), kept up to
+    // date in place: it changes as each sheet of its stack comes in and is
+    // read, which is no reason to draw the card again under someone typing
+    // in it. doc: the document as the last look listed it.
+    function paintAuto(view, doc) {
+      if (!view.auto) return;
+      if (doc) view.listed = doc;
+      const text = effectiveStatus(view.listed) === "ready" ? autoUploadLine(view.listed, view) : "";
+      setLine(view.auto, text);
+      view.auto.hidden = !text;
     }
 
     async function uploadMatchedDocuments() {

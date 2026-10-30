@@ -36,9 +36,10 @@ Supports English, Hindi, and Marathi form labels. Only the Student ID value is r
    logs the attempt for the History page. **You press Confirm and upload** -
    or, with **Upload matched pages automatically** on, the page does it by
    itself for a Ready document scanned for one school whose Student ID is
-   exactly a student there, not yet marked scanned, once its Declaration page,
-   scanned straight after it on the same computer, and the page after that
-   have been read; everything else waits for you.
+   exactly a student there, not yet marked scanned, once its whole stack has
+   come in clean from one computer - Student ID page, Declaration page, by
+   turns from first to last - and nothing more has come for 10 minutes, while
+   the page is open on screen; everything else waits for you.
 
 ```text
 Physical form → scanner (its Scan button or its own software)
@@ -101,11 +102,12 @@ or with an unverified Google email, gets bounced back to `/login` with an error.
    (see [Batch codes and documents](#batch-codes-and-documents)).
 5. Check each document under **OCR results**, correct the Student ID (or code)
    if needed, and press **Confirm and upload**. Nothing is saved until you do -
-   except that, with **Upload matched pages automatically** on (the default),
-   a Ready document scanned for one school whose Student ID is exactly a
-   student there, not yet marked scanned, is confirmed and uploaded by itself
-   once its Declaration page, scanned straight after it, and the page after
-   that have been read (see
+   except that, with **Upload matched pages automatically** on (when the
+   server offers it), a Ready document scanned for one school whose Student ID
+   is exactly a student there, not yet marked scanned, is confirmed and
+   uploaded by itself once its whole stack has come in clean and nothing more
+   has come for 10 minutes, while the page is open on screen; each Ready card
+   says when, or why it waits (see
    [Uploading matched pages automatically](#uploading-matched-pages-automatically)).
 
 ## Scanning - nothing of ours to install
@@ -230,8 +232,9 @@ added by hand are in the same run as what the scan folder sends, so a form
 added a sheet at a time is still one document; they carry the page's id with
 `-1` after it, and a form with one sheet from the scan folder and one added by
 hand - one added while the scanner was between its two sheets, say - waits
-for you. Scans sent without an id, by an older page, make runs by the time
-alone.
+for you, as does every other form of a stack with files added by hand in
+among what the scan folder sent. Scans sent without an id, by an older page,
+make runs by the time alone.
 
 A Declaration page joins the page right before it in its run, a blank page
 between them passed over, when that page is not a Declaration page itself, was
@@ -244,13 +247,13 @@ a form that was already confirmed, or sent for another school or city - and
 page without its Student ID page, so its forms may be paired wrongly - check
 them", needs your look and does not go up by itself. That is what catches a
 stack fed Declaration page first, and a missing or face-down Student ID page.
-A form goes up by itself only once every page scanned before it, and the page
-after its Declaration page, have been read, so the forms such a page may put
-out of step - those after it, and the one straight before it - are held before
-they can go up; a form further back may have gone up already. A page the
-reader took for a Declaration page and that you then typed a Student ID on
-holds its run the same way. How a page pairs never changes once the form
-before it drops off the scan page after `DONE_DOCUMENTS_HOURS`.
+No form of a run goes up by itself before the whole run has come in and
+settled (see
+[Uploading matched pages automatically](#uploading-matched-pages-automatically)),
+so such a page holds every form of it in time. A page the reader took for a
+Declaration page and that you then typed a Student ID on holds its run the
+same way. How a page pairs never changes once the form before it drops off
+the scan page after `DONE_DOCUMENTS_HOURS`.
 
 A run is held the same way - "This stack has a page with no Declaration page
 between it and the next form" - when a form begins straight after a page that
@@ -263,9 +266,13 @@ straight after it. A Declaration page you can attach (below) counts as one
 here. And a stack cut in two runs - a pause longer than `RUN_GAP_MINUTES`, or
 the scan page loaded again - holds the second run too when the first is held
 ("This stack may go on from one scanned before it that has a page out of
-place"): a run that began after a held one ended, for the same school and
-city, from the same scan page or within `RUN_GAP_MINUTES` of it. None of its
-forms goes up by itself while that earlier run still has a page to be read.
+place"): any later run from the same scan page, however long after and for
+whichever school, and one from another scan page that began within
+`RUN_GAP_MINUTES` after a held one ended, for the same school and city. One
+from another scan page that began later than that is not held, but for
+`HELD_STACK_HOURS` (12) after a held one none of its forms goes up by itself
+(see
+[Uploading matched pages automatically](#uploading-matched-pages-automatically)).
 
 Statuses are **Ready** (the ID matched a student at the school and the
 Declaration page is with it), **Waiting** (no Declaration page yet: the page
@@ -368,28 +375,80 @@ own Drive - only when all four hold:
    failed or still being read. With batch codes off it is a whole form as the
    reader put it together: exactly one Declaration page, recognised by the
    reader (not attached by you), scanned straight after its Student ID page -
-   no page of any kind between them, a blank one included - within
-   `RUN_GAP_MINUTES`, from the same scan page and the same way (both from the
-   scan folder, or both added by hand), in a run with nothing out of place.
-   It goes up only once its stack has settled: every page scanned before it
-   has been read, and so has the page after its Declaration page, which must
-   be the next form's Student ID page - or, at the end of a stack, nothing has
-   come after it for `DECLARATION_WAIT_SECONDS` (the page keeps looking until
-   then). A Declaration page out of place straight after it holds it in
-   time. A Student ID page never goes up by itself alone. Nor:
+   no page of any kind between them, a blank one included, and within
+   `DECLARATION_WAIT_SECONDS` (120): one that came later joined a form that
+   had already been shown without one, so it may be the next stack's first
+   sheet - from the same scan page and the same way (both from the scan
+   folder, or both added by hand). A Student ID page never goes up by itself
+   alone. And with batch codes off it goes up only with **its whole stack** -
+   its run, everything one scan page sent with no pause longer than
+   `RUN_GAP_MINUTES` - never on its own. None of a stack's forms goes up by
+   itself until the stack is:
+   - **finished**: its last page reached the server at least
+     `STACK_SETTLE_MINUTES` (10) ago, so a jam or pause of up to ten minutes
+     is waited out; every page of it has been read; none of your scans that
+     may be part of it or beside it - from the same scan page, or for the same
+     school and city - is still being stored on the server, and every page of
+     yours listed there could be read from the queue; and no stack sent before
+     it from the same scan page, or for the same school and city in the
+     `HELD_STACK_HOURS` before it, is still being read;
+   - **clean**: it begins with a Student ID page whose ID the reader read,
+     then goes Declaration page, Student ID page, Declaration page and so on
+     to the end, ending with a Declaration page; every Declaration page is one
+     the reader recognised; there is no blank page, no page that could not be
+     read, nothing out of place (a held run, above, including any run after a
+     held one from the same scan page, however long after); every page came
+     the same way - all from the scan folder, or all added by hand; and you
+     have not corrected any page of it - no Student ID typed, even one taken
+     back, and no Declaration page attached or taken off (a correction that
+     can no longer be read, from a file a power cut left empty, still counts).
+     A stack fed Declaration page first begins or ends with a page out of
+     place, so this alone keeps it back, as well as one whose first child
+     returned only the Student ID page, and one with a cover sheet on top;
+   - **alone**: no page for the same school and city came from any other scan
+     page - another computer, another tab, a file added by hand there, an
+     older page that sends no id, a late retry from a tab you have left -
+     from `RUN_GAP_MINUTES` before its first page to `STACK_SETTLE_MINUTES`
+     after its last; and it did not begin within `HELD_STACK_HOURS` (12) after
+     a held stack for the same school and city ended, from whichever scan
+     page: it may be the rest of that one, sent after a long break from the
+     page loaded again, or from the other computer.
+
+   Then each of its forms that passes everything else here goes up, each its
+   own confirm; one that does not - a near match, say - waits for you without
+   stopping the rest. Each Ready card says which: "Goes up by itself at 14:32
+   if nothing else comes and this page is still open on screen", "Not yet:"
+   and what it still waits for, or "Waits for you:" and the one reason. It is
+   the page that confirms, so only while it is open on screen: a tab in the
+   background, or one closed, does not look at all, and what has settled goes
+   up when you are back on it. The page keeps looking while a stack settles.
+   What scan order cannot show is still not caught: two Student ID pages or
+   two Declaration pages swapped with each other, or two faults that cancel
+   out into a stack that goes Student ID page, Declaration page, as it
+   should - a form missing its Declaration page with a stray one straight
+   after it, a few seconds apart, say. Nor is what a pause cuts off: a
+   stack is judged as it stands once nothing has come for
+   `STACK_SETTLE_MINUTES`, so when a pause longer than that - or the rest
+   sent after that long from the page loaded again, or from the other
+   computer - cuts off the sheet that would have shown a fault, the forms
+   before the cut go up as they were paired, rightly or not: a stray
+   Declaration page between a form's two sheets with the feeder jammed on
+   the next sheet for more than ten minutes, say, or the first part of a
+   stack fed Declaration page first whose first child returned only the
+   Student ID page. Nor:
    - any other document for the same student, open or confirmed by you in the
      last `DONE_DOCUMENTS_HOURS` - the same form scanned twice, or two pages of
      one form that both carry the ID. Both wait for you;
    - a student already marked scanned (`scanned_at` set), by anyone at any
      time - a second form for one child is for you to look at;
    - any of your scans still to send or to read: a form's last part - or,
-     with batch codes off, the sheet after its Declaration page - may still
-     be on its way.
-2. The match is **exact**: the Student ID read by OCR, or typed by you, is the
-   student's own ID after the clean-up every Student ID gets - spaces, dashes
-   and case set aside and, for a reading that is not shaped like a Student ID
-   as read, a letter put right where the shape needs a digit (`Z` for `2`, `O`
-   for `0` in the date of birth) or a digit where it needs a letter. That is
+     with batch codes off, the rest of its stack - may still be on its way.
+2. The match is **exact**: the Student ID read by OCR - or, with batch codes
+   on, typed by you - is the student's own ID after the clean-up every Student
+   ID gets - spaces, dashes and case set aside and, for a reading that is not
+   shaped like a Student ID as read, a letter put right where the shape needs
+   a digit (`Z` for `2`, `O` for `0` in the date of birth) or a digit where it
+   needs a letter. That is
    done to the reading before it is looked up, so it counts as exact. A match
    the lookup reaches only by changing the ID it was given - to a near stored
    ID by the ID's shape, or by a fuzzy repair of a misread letter - is not
@@ -400,11 +459,18 @@ own Drive - only when all four hold:
    switch existed count as sent with it off, so they never go up by themselves.
 
 Everything else waits for you to press **Confirm and upload**, as before, and
-nothing goes up by itself while the switch is off. The server checks all of
-this again before saving anything, looks the student up by the exact ID only,
-and marks the student only if nobody has marked them scanned meanwhile, so a
-page that is out of date cannot upload the wrong document: it is refused, with
-nothing saved. Each document is tried once per visit. If it is refused or the
+nothing goes up by itself while the switch is off. The server decides all of
+it from the queue - the page only asks - and checks it again from a fresh look
+once it holds the document's lock, before saving anything; it looks the
+student up by the exact ID only, and marks the student only if nobody has
+marked them scanned meanwhile, so a page that is out of date cannot upload the
+wrong document: it is refused, with nothing saved. A Student ID you type, or a
+Declaration page you attach or take off, while a form of its stack is being
+confirmed is refused rather than left behind by it - try again a moment later.
+Each document is tried once per visit - unless the server answers that it may
+still go up by itself once its stack has finished after all (a scan of yours
+for the same school still being stored at that moment, say), when it is
+asked for again on the next look. If it is refused or the
 database is down, it stays on its card for you to confirm, and is not tried
 again by itself. If your Google sign-in has run out or there is none (Tether),
 nothing is saved; if Drive fails, the document is saved and waits for **Retry
@@ -482,12 +548,12 @@ comes from another site. POSTs with a body send it as `application/json`.
 | --- | --- |
 | `POST /api/scans` (multipart `file`, `school`, `location`, `auto_upload`, `sender`) | Store and queue a scan, one page per page of the file; each page keeps `auto_upload` (`1` when Upload matched pages automatically is on, off when missing) and `sender`, the scan page's id for itself (32 hex digits, with `-1` after them for a file added by hand; anything else is kept as none). `202 {pages: [{page_id, source_page}]}`. No OCR. |
 | `GET /api/batches` | Your documents by batch (newest first) - with batch codes off, one group with no batch, newest scan first - `unsorted` pages (with batch codes off, each with the `declaration_pages` of its form and, for a page that may be the Declaration page the reader missed, `attach_to {page_id, student_name}`), every page with its status (`pages`) and the `queue` counts. |
-| `GET /api/documents/<key>` | One document (`B1-12`, or with batch codes off `P` and its Student ID page's id; `~<id>` added once confirmed) with its parts. `auto_upload: true` on an open one the page may confirm by itself - with batch codes off, `auto_upload_pending: true` on one it may once its stack has settled, which the page keeps looking at; `confirmed_automatically` on one it did. |
+| `GET /api/documents/<key>` | One document (`B1-12`, or with batch codes off `P` and its Student ID page's id; `~<id>` added once confirmed) with its parts. `auto_upload: true` on an open one the page may confirm by itself - with batch codes off, `auto_upload_pending: true` on one it may once its stack has finished, which the page keeps looking at, `auto_upload_at` (India time) when it goes up if nothing else comes - given only while time is all it waits for - and `auto_upload_refusal`, why it is not going up now; `confirmed_automatically` on one it did. |
 | `GET /api/pages/<page_id>/image?size=thumb\|full` | The page's scanned image, to its owner only. |
 | `POST /api/pages/<page_id>/code {code}` | Set the page's batch code by hand (`""` clears it); `409` with batch codes off. |
-| `POST /api/pages/<page_id>/student-id {student_id}` | Set the page's Student ID by hand; looked up read-only. |
-| `POST /api/pages/<page_id>/declaration {of}` | With batch codes off: attach the page by hand as the Declaration page of the form straight before it (`of`: that form's first page, as `attach_to` offered it; `""` takes it off). `409` with nothing saved when it is no longer straight after that form's page with no Declaration page, or with batch codes on. |
-| `POST /api/documents/<key>/confirm {student_id, page_ids}` | The only write: mark scanned, upload the PDF, log it. `page_ids` are the parts the page was showing; only exactly those are confirmed. `409` (nothing saved) when the document has gained or lost a part since, when not found, still being read, or no Google sign-in; `400` without `page_ids`; `503` when the database is down. A Drive failure answers `200` with `uploaded: false`; a History entry not written after the upload, `uploaded: true, finished: false`. With `automatic: true` (the page confirming by itself) it is done only while the document is still `auto_upload`, for the student it matched, found by the exact ID and not marked scanned meanwhile, with a Google sign-in still in date - otherwise `409` with nothing saved. |
+| `POST /api/pages/<page_id>/student-id {student_id}` | Set the page's Student ID by hand; looked up read-only. With batch codes off, `409` with nothing kept while a form of its stack is being confirmed, or when the stack changed meanwhile. |
+| `POST /api/pages/<page_id>/declaration {of}` | With batch codes off: attach the page by hand as the Declaration page of the form straight before it (`of`: that form's first page, as `attach_to` offered it; `""` takes it off). `409` with nothing saved when it is no longer straight after that form's page with no Declaration page, while a form of its stack is being confirmed, when the stack changed meanwhile, or with batch codes on. |
+| `POST /api/documents/<key>/confirm {student_id, page_ids}` | The only write: mark scanned, upload the PDF, log it. `page_ids` are the parts the page was showing; only exactly those are confirmed. `409` (nothing saved) when the document has gained or lost a part since, when not found, still being read, or no Google sign-in; `400` without `page_ids`; `503` when the database is down. A Drive failure answers `200` with `uploaded: false`; a History entry not written after the upload, `uploaded: true, finished: false`. With `automatic: true` (the page confirming by itself) it is done only while the document is still `auto_upload`, for the student it matched, found by the exact ID and not marked scanned meanwhile, with a Google sign-in still in date - otherwise `409` with nothing saved, with `pending: true` when it may still go up by itself once its stack has finished, so the page asks again later. |
 | `POST /api/documents/<key>/upload` | Finish a confirmed document: retry only its Drive upload, or only its History entry (`502` if it is still not finished). |
 
 The older one-shot routes still answer, for scripts: `POST /api/extract` and

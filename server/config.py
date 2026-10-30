@@ -91,10 +91,25 @@ def auto_upload_on() -> bool:
 RUN_GAP_MINUTES = 10
 # How long a Student ID page with nothing after it yet waits for its
 # Declaration page - the scanner's next file - before a person may confirm
-# it without one; and how long a form whose Declaration page has nothing
-# after it yet waits before it may go up by itself, in case the next file is
-# a page out of place.
+# it without one. A Declaration page that comes later still joins it, but
+# that form no longer goes up by itself: it was shown without one.
 DECLARATION_WAIT_SECONDS = 120
+# With Upload matched pages automatically on and batch codes off, no form
+# goes up by itself until its whole stack - its run - is finished: its last
+# page reached the server at least this many minutes ago, so a jam or a
+# pause as long as RUN_GAP_MINUTES is waited out (documents._judge_stack).
+# Never less than RUN_GAP_MINUTES: a page that came sooner would still be
+# part of the stack.
+STACK_SETTLE_MINUTES = 10
+# With Upload matched pages automatically on and batch codes off: for how
+# long after a held stack - one with a page out of place - no later stack
+# for its school and city goes up by itself, whichever scan page sends it:
+# the rest of the held one may come after a long break, from the page
+# loaded again or from the other computer (documents._judge_stack). From
+# the held stack's own scan page, that is so however long after. Looked for
+# among the pages the scan page still lists, so DONE_DOCUMENTS_HOURS is
+# best no shorter.
+HELD_STACK_HOURS = 12
 
 
 # Where the handwritten batch code ("B1-12") is written, as fractions

@@ -1412,18 +1412,24 @@ def test_page_asks_for_no_batch_codes(client: FlaskClient) -> None:
             " document, one PDF"
         ),
         (
-            "is confirmed and uploaded by itself once its Declaration page, scanned straight after it, and the"
-            " page after that have been read."
+            "is confirmed and uploaded by itself once its whole stack has come in clean - each form's Student ID"
+            " page, then its Declaration page, nothing out of place or corrected by hand - and nothing more has"
+            " come for 10 minutes."
         ),
         (
-            "once its one Declaration page, scanned straight after it on this computer within a few minutes,"
-            " has been read - and so has the next form's Student ID page after it, or nothing has come for a"
-            " couple of minutes."
+            "a document whose Student ID - as read - is exactly one of that school's students is confirmed and"
+            " uploaded to your Drive without pressing Confirm - but only once its whole stack, as this computer"
+            " sent it, is in: Student ID page, Declaration page, by turns from first to last, every page read,"
+            " and nothing more from this computer or any other for that school for 10 minutes - and only while"
+            " this page is open on screen, as it is this page that does it. Each Ready card says when it goes"
+            " up, or why it waits."
         ),
         (
-            "a Student ID page with no Declaration page straight after it, a Declaration page you attached by"
-            " hand, a form with one sheet from the scan folder and one added by hand, a stack with a page out"
-            " of place, or anything that needs checking still waits for you."
+            "a Student ID page with no Declaration page straight after it, a stack with a page out of place,"
+            " blank or unreadable, a Student ID you typed or a Declaration page you attached or took off, files"
+            " added by hand in among what the scan folder sent, another computer or tab scanning for the same"
+            " school at the same time, a stack for a school in the 12 hours after one of its stacks had a page"
+            " out of place, or anything that needs checking still waits for you."
         ),
         "go to Drive as one PDF, the Student ID page first",
         (
@@ -1431,7 +1437,12 @@ def test_page_asks_for_no_batch_codes(client: FlaskClient) -> None:
             " scanned with it wait for you to check them - as they do after a Student ID page with no"
             " Declaration page after it;"
         ),
-        "and its Declaration page read straight after it, then the page after that - is confirmed and uploaded",
+        (
+            "in a stack that came in whole and clean, Student ID page and Declaration page by turns with nothing"
+            " out of place, nothing corrected by hand and no other computer scanning for the school, and has had"
+            " nothing more for 10 minutes - is confirmed and uploaded by itself while this page is open on screen,"
+            " and says so"
+        ),
         "a Declaration page the reader missed can be attached there to the form straight before it.",
         "Scan each form's Student ID page and, straight after it, its Declaration page: the two are one document.",
         "its Student ID page first and its Declaration page after it",

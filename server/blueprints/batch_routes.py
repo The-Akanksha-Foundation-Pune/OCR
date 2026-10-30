@@ -10,12 +10,13 @@ scan page (the sender id each scan carries). Nothing is written to the
 database or Drive until a document is confirmed - the only write path is
 POST /api/documents/<key>/confirm. A person presses Confirm, or, with
 Upload matched pages automatically on, the page confirms by itself a
-document the server lists as auto_upload: Ready, with batch codes off its
-one Declaration page, recognised by the reader, with it in a stack with
-nothing out of place, once the page after it has been read, its Student
-ID an exact match for a student not yet marked scanned, one school picked
-(documents.auto_upload_refusal). The page does it because the upload goes
-to the person's own Drive, with the Google sign-in only their session
+document the server lists as auto_upload: Ready, its Student ID an exact
+match for a student not yet marked scanned, one school picked - and with
+batch codes off its one Declaration page, recognised by the reader, with
+it, and its whole stack finished, clean and alone
+(documents.auto_upload_refusal, documents._judge_stack). The server alone
+says which and when; the page only asks. It does it because the upload
+goes to the person's own Drive, with the Google sign-in only their session
 holds.
 
 Every route is for the signed-in person's own pages only: another person's
@@ -57,8 +58,8 @@ def _image_url(page_id: str, size: str) -> str:
     return url_for("batch.page_image", page_id=page_id, size=size)
 
 
-def _error(message: str, status: int) -> ResponseReturnValue:
-    return jsonify({"error": message}), status
+def _error(message: str, status: int, **more: Any) -> ResponseReturnValue:
+    return jsonify({"error": message, **more}), status
 
 
 def _json_body() -> dict[str, Any]:
@@ -219,7 +220,12 @@ def page_code_api(page_id: str) -> ResponseReturnValue:
 
 @batch_bp.post("/api/pages/<page_id>/student-id")
 def page_student_id_api(page_id: str) -> ResponseReturnValue:
-    """Set (or with "" clear) a page's Student ID by hand, and look it up read-only."""
+    """Set (or with "" clear) a page's Student ID by hand, and look it up read-only.
+
+    With batch codes off, 409 with nothing kept while a form of the page's
+    stack is being confirmed - by the page itself, say - or when the stack
+    changed meanwhile: a correction is never left behind by a confirm.
+    """
     payload = _json_body()
     owner = _me()
     try:
@@ -240,9 +246,10 @@ def page_declaration_api(page_id: str) -> ResponseReturnValue:
 
     The body is {of}: the id of that form's first page, as the page offered
     it (an Unsorted page's attach_to); "" takes the page off again. 409
-    with nothing saved when batch codes are on, or when the page is no
-    longer straight after that form's page with no Declaration page. Such a
-    form never goes up by itself.
+    with nothing saved when batch codes are on, when the page is no longer
+    straight after that form's page with no Declaration page, while a form
+    of its stack is being confirmed, or when the stack changed meanwhile.
+    Such a form never goes up by itself, nor does the rest of its stack.
     """
     payload = _json_body()
     owner = _me()
@@ -272,7 +279,9 @@ def confirm_document_api(key: str) -> ResponseReturnValue:
     The page confirming a document by itself adds "automatic": true. That is
     done only while the document may still go up without a person, for the
     student it matched exactly; otherwise 409 with nothing saved, and the
-    document waits for someone to press Confirm.
+    document waits for someone to press Confirm - or, with "pending": true,
+    it may still go up by itself once its stack has finished, and the page
+    asks again on a later look.
     """
     payload = _json_body()
     owner = _me()
@@ -286,6 +295,8 @@ def confirm_document_api(key: str) -> ResponseReturnValue:
             automatic=payload.get("automatic") is True,
         )
     except documents.DocumentError as exc:
+        if exc.pending:
+            return _error(exc.message, exc.status_code, pending=True)
         return _error(exc.message, exc.status_code)
     except LookupUnavailable as exc:
         return _error(exc.message, exc.status_code)
