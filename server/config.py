@@ -275,7 +275,8 @@ BLANK_ID_INK_RATIO = float(os.getenv("BLANK_ID_INK_RATIO", "0.02"))
 # A horizontal run this wide, as a fraction of the crop, is the printed rule
 # rather than a letter stroke.
 BLANK_ID_RULE_WIDTH_FRACTION = 0.25
-# Declaration pages ("घोषणा") are recognised from the top of the page only.
+# Declaration pages ("घोषणा") of the two-sheet form have the heading at the
+# top of their own sheet, and are recognised from the top of the page.
 DECLARATION_TOP_FRACTION = 0.15
 DECLARATION_WORK_WIDTH = 900
 # matchTemplate score and how far from the left edge the heading may sit.
@@ -283,6 +284,25 @@ DECLARATION_WORK_WIDTH = 900
 # form pages scored at most 0.62.
 DECLARATION_MATCH_MIN = float(os.getenv("DECLARATION_MATCH_MIN", "0.72"))
 DECLARATION_MATCH_MAX_X_FRACTION = 0.25
+# The form printed on both sides of one sheet has its "घोषणा" heading part
+# way down the back, at the left margin, so the heading is looked for down
+# the whole left margin as well (as the page came, then turned round), and a
+# page that matches this well is its Declaration side - unless its own
+# layout shows it is a Student ID page (extract_student_id._extract). The
+# page and the heading are both blurred by DECLARATION_SIDE_BLUR (pixels at
+# DECLARATION_WORK_WIDTH) and the heading tried at each of
+# DECLARATION_SIDE_SCALES of its size, the best counting
+# (extract_student_id._heading_match).
+# Measured on real scans of the one-sheet Hindi form, every back and front,
+# as the worker reads them, as scanned (150 dpi grey)
+# and made 100 dpi grey or black and white - a fixed threshold of 96, 128 or
+# 160, Otsu, an adaptive threshold, dithering, a PDF: in every one of those,
+# every back 0.889 and up and every front at most 0.786. This is the middle
+# of that gap. Matched sharp and at the template's size only, backs went as
+# low as 0.691 and fronts as high as 0.687 across those scans.
+DECLARATION_SIDE_MATCH_MIN = float(os.getenv("DECLARATION_SIDE_MATCH_MIN", "0.84"))
+DECLARATION_SIDE_BLUR = 1.0
+DECLARATION_SIDE_SCALES = (0.9, 0.95, 1.0, 1.05, 1.1)
 # Width of the page the heading image was cropped from, so a 600 DPI scan
 # and a 200 DPI PDF scale the same template.
 DECLARATION_TEMPLATE_PAGE_WIDTH = 1655

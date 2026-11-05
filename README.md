@@ -26,7 +26,8 @@ Supports English, Hindi, and Marathi form labels. Only the Student ID value is r
    within the school you picked, repairing a near-miss reading only when it is
    safely unambiguous.
 4. Each form is one **document**: its Student ID page and the Declaration
-   page scanned straight after it, which has no Student ID - or, with batch
+   page scanned straight after it, which has no Student ID - for the form
+   printed on both sides of one sheet, the sheet's two sides - or, with batch
    codes on, the pages with the same batch code. The page shows each
    document with its parts, the Student ID read and who it matched; a page
    that could not be read is shown as its scanned image, so you can type its
@@ -174,8 +175,9 @@ works the same way - only the save folder and the scan settings change.
    https://www.pfu.ricoh.com/global/scanners/fisp/dl/sp-1130n.html, and
    install both.
 2. In PaperStream Capture create a profile: output folder `Documents\OCR Scans`,
-   file type JPEG (or PDF), 100 dpi, Black & White, one side (simplex),
-   document feeder.
+   file type PDF (or TIFF) with all of a scan's pages in one file, 100 dpi,
+   Black & White, document feeder, multifeed (double-feed) detection on, and
+   the sides your form needs (below).
 3. Link the profile to the scanner's Scan button (PaperStream Capture's
    "Assign to scanner button").
 4. Press the Scan button on the SP-1130N.
@@ -185,21 +187,32 @@ works the same way - only the save folder and the scan settings change.
 1. Install Ricoh's **Image Scanner Driver for macOS (ICA)** for the SP-1130N
    (it works over USB).
 2. Open Image Capture and choose the SP-1130N: Use Document Feeder, Kind
-   Black & White, Resolution 100 dpi, Format JPEG or TIFF, Scan To the
-   `OCR Scans` folder.
+   Black & White, Resolution 100 dpi, Format PDF with Combine into single
+   document ticked, Scan To the `OCR Scans` folder.
 3. Press Scan.
 
 **Linux**
 
 Use Document Scanner (simple-scan), which drives the SP-1130N through SANE's
-`fujitsu` backend, and save each scan into the `OCR Scans` folder.
+`fujitsu` backend, and save each scan into the `OCR Scans` folder as one PDF.
 
 **ChromeOS**
 
-Use the Scan app and set it to save to the `OCR Scans` folder.
+Use the Scan app and set it to save to the `OCR Scans` folder, file type PDF.
 
-**Every OS:** load page 1 of each form face down in the feeder. The page picks
-each scan up within a few seconds of the scanner saving it.
+**Every OS:** for the form printed on **both sides of one sheet**, scan both
+sides (duplex) from the feeder into **one file for each stack** (PDF or TIFF),
+with **skip blank pages** (blank page removal) off, so every sheet gives two
+images - its Student ID side and its Declaration side - and keep the
+scanner's **double-feed (multifeed) detection** on. Only a file of several
+pages is paired sheet by sheet (below): one image per side, as JPEG saves it,
+is paired by scan order, so a sheet fed the other way up then pairs with its
+neighbour's side. And two sheets the feeder takes as one come in as the first
+one's Student ID side and the second one's Declaration side, which looks like
+a sheet of its own - nothing but the scanner can catch that. For the
+**two-sheet form**, scan one side (simplex). Load page 1 of each form - its
+Student ID page or side - face down in the feeder. The page picks each scan
+up within a few seconds of the scanner saving it.
 
 ### 2. Add scanned files (every browser)
 
@@ -223,6 +236,42 @@ two sheets, scanned one straight after the other: the **Student ID page**, then
 its **Declaration page** (the signature page, headed "घोषणा"), which has no
 Student ID. The two are one document: one Confirm, one PDF with the Student ID
 page first, named `<StudentName>_<StudentID>.pdf` (same folders as below).
+
+The reader knows a Declaration page by its printed "घोषणा" heading: at the top
+left of its own sheet (the two-sheet form), or anywhere down the left margin -
+part way down the back of the form printed on **both sides of one sheet**.
+Down the margin the page and the heading are matched a little blurred and at a
+few sizes around the heading picture's own, and a page matching at least
+`DECLARATION_SIDE_MATCH_MIN` (0.84) is a Declaration side: on real scans of it -
+as scanned in grey, and remade 100 dpi grey or Black & White by a fixed
+threshold, Otsu, an adaptive threshold or dithering, as TIFF or PDF - every
+back matched 0.889 and up and every front at most 0.786. It looks again with
+the page turned round, for a sheet fed upside down, and then turns the page
+upright for the thumbnails and the PDF. A Declaration page is not read at all -
+no Student ID is looked for on it. A page whose own ruled layout pins its
+Student ID box, with handwriting in it, is never taken for a Declaration side,
+whatever the search down the margin finds. (The two-sheet form's top-left
+check is made before that, as it always was: its Declaration pages can fit a
+ladder by accident. On real scans of the one-sheet form it took no page at all.)
+
+The form printed on both sides of one sheet, scanned both sides into one
+multi-page file (TIFF or PDF), comes in as two pages a sheet, and the file is
+paired **sheet by sheet**, by place: pages 1 and 2 are one form, 3 and 4 the
+next, and so on - the Student ID side first in the document and the PDF,
+whichever side came first. That holds only while the file has an even number
+of pages and every sheet is one Student ID side and one Declaration side the
+reader recognised; a file that breaks it anywhere - an odd page, a blank side,
+a back the reader missed - is paired by scan order like any other, below, and
+its stack waits for you. As the rest of a file can still break it, a file's
+forms wait, with no Confirm to press, until every page of it has been read.
+A sheet whose Declaration side came
+first is still one form, but it **needs your look**, and never goes up by
+itself: fed the other way up, it is right as it is - but a file whose first
+image is a back (its front never scanned) pairs every sheet that way, each
+with the sheet before's Declaration side, and only the paper shows which.
+Files of one image each are paired by scan order too, so each sheet must then
+come Student ID side first; and so is a file of the two-sheet form, its
+Declaration pages headed at the top of their own sheets, as before.
 
 Pages are only put together inside a **run**: the pages one scan page sent -
 the page makes an id for itself each time it is loaded and sends it with every
@@ -287,7 +336,9 @@ page its PDF is the Student ID page alone), **Failed**, **Confirmed** and
 **Unsorted** as one card, with its scans and a box to type the ID; once typed,
 it becomes a document with both pages. Blank and empty-ID pages are skipped and
 wait under Unsorted too; one becomes a document only if you type its Student
-ID, in case the skip was wrong (a blank page offers no box).
+ID, in case the skip was wrong (a blank page offers no box). A page is taken
+for empty-ID only where its ruled layout pins the Student ID box precisely;
+one whose layout fits loosely is read like any other.
 
 When the reader misses a Declaration page's heading - a crooked or faint scan -
 the page waits under Unsorted as a page with no Student ID. If it came
@@ -342,7 +393,8 @@ or made by the page itself for an exact match (see
 [Uploading matched pages automatically](#uploading-matched-pages-automatically)). It looks the
 Student ID up within the school (nothing is saved if the student is not found
 there, or if the database cannot be reached), marks `scanned_at`, makes one
-PDF of all the parts in scan order, and puts it in **your own** Google Drive at
+PDF of all the parts in scan order (for a sheet scanned both sides, its
+Student ID side first), and puts it in **your own** Google Drive at
 
 ```text
 OCR / <School> / <Grade> / <Division> / <StudentName>_<StudentID> / <StudentName>_<StudentID>_<Code>.pdf
@@ -402,6 +454,10 @@ own Drive - only when all four hold:
      have not corrected any page of it - no Student ID typed, even one taken
      back, and no Declaration page attached or taken off (a correction that
      can no longer be read, from a file a power cut left empty, still counts).
+     A stack with a file scanned both sides is clean only when it is nothing
+     but such files, each pairing into sheets with every sheet Student ID side
+     first: a sheet fed the other way up, a file that does not pair into
+     sheets, or other scans in among them keep it back.
      A stack fed Declaration page first begins or ends with a page out of
      place, so this alone keeps it back, as well as one whose first child
      returned only the Student ID page, and one with a cover sheet on top;
@@ -426,7 +482,10 @@ own Drive - only when all four hold:
    two Declaration pages swapped with each other, or two faults that cancel
    out into a stack that goes Student ID page, Declaration page, as it
    should - a form missing its Declaration page with a stray one straight
-   after it, a few seconds apart, say. Nor is what a pause cuts off: a
+   after it, a few seconds apart, say; or, in a file scanned both sides, two
+   sheets the feeder took as one, which come in as the first one's Student
+   ID side and the second one's Declaration side - so keep the scanner's
+   double-feed check on. Nor is what a pause cuts off: a
    stack is judged as it stands once nothing has come for
    `STACK_SETTLE_MINUTES`, so when a pause longer than that - or the rest
    sent after that long from the page loaded again, or from the other

@@ -2170,7 +2170,7 @@ def test_page_drop_zone_and_choose_files_take_the_same_way_in(client: FlaskClien
         (
             {"userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", "platform": "MacIntel", "maxTouchPoints": 0},
             ["Image Scanner Driver for macOS (ICA)", "Image Capture", "Use Document Feeder",
-             "100 dpi", "JPEG or TIFF", "Scan To", "OCR Scans", "face down"],
+             "100 dpi", "Combine into single document", "Scan To", "OCR Scans", "face down"],
         ),
         (
             {"userAgent": "Mozilla/5.0 (X11; Linux x86_64)", "platform": "Linux x86_64", "maxTouchPoints": 0},

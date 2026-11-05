@@ -196,6 +196,10 @@ class PageResult:
         form_language: The form's language, when its layout was recognised.
         confidence: The reader's confidence in the Student ID.
         read_at: When it was read, India time.
+        declaration_side: A Declaration page whose heading is part way down
+            it: the back of a form printed on both sides of one sheet
+            (documents._sheets). False for one headed at the top of its own
+            sheet, and for a page read before the reader looked.
     """
 
     code: str | None = None
@@ -213,6 +217,7 @@ class PageResult:
     form_language: str = ""
     confidence: float = 0.0
     read_at: str = ""
+    declaration_side: bool = False
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PageResult:

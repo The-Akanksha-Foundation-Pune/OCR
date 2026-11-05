@@ -246,6 +246,32 @@ def test_the_layout_still_turns_an_upside_down_page(
     assert float(np.mean(stored[: stored.shape[0] // 10, stored.shape[1] * 3 // 4 :] < 128)) > 0.05
 
 
+@pytest.mark.parametrize("upright_fit", [None, 0.0100], ids=["no fit as it came", "a looser fit as it came"])
+def test_a_loose_fit_turned_round_does_not_turn_the_page(
+    client: FlaskClient, students: Students, readers: Readers, monkeypatch: pytest.MonkeyPatch,
+    queue_dir: Path, upright_fit: float | None,
+) -> None:
+    """An upright page can fit some ladder upside down, loosely - on real scans upright fronts did - so it is kept as it came.
+
+    Turned round at the fit's word, it would be stored and filed upside down.
+    """
+    [page_id] = _queue(client)
+    before = (queue_dir / page_id / "page.jpg").read_bytes()
+
+    def identify(image: np.ndarray) -> Any:
+        upright = float(np.mean(image[: image.shape[0] // 10, image.shape[1] * 3 // 4 :] < 128)) > 0.05
+        error = upright_fit if upright else 0.0062
+        return None if error is None else SimpleNamespace(error=error)
+
+    monkeypatch.setattr(ocr_worker, "identify", identify)
+
+    ocr_worker.process_one()
+
+    result = json.loads((queue_dir / page_id / "result.json").read_text())
+    assert result["orientation"] == 0
+    assert (queue_dir / page_id / "page.jpg").read_bytes() == before
+
+
 # ================================================================== documents
 def test_each_form_is_its_student_id_page_and_the_declaration_page_after_it(client: FlaskClient) -> None:
     # As the scanner sends them: one sheet a scan, each form's two one after the other.

@@ -56,6 +56,7 @@ import numpy as np
 
 from server.config import (
     BLANK_PAGE_INK_RATIO,
+    LAYOUT_TRUST_ERROR,
     OCR_MAX_LONG_SIDE,
     OCR_WORKER_IN_PROCESS,
     PAGE_MAX_DPI,
@@ -269,13 +270,17 @@ def read_ocr(meta: scan_queue.PageMeta) -> scan_queue.PageResult:
     """OCR a page: orientation, batch code and Student ID. No database.
 
     The page is tried both ways up and kept the way its form layout matches
-    better. A page with no layout to match (the signature page) is kept
+    better - turned round only on a close match (_layout_orientation). A
+    page with no layout to match (the signature page) is kept
     whichever way up its batch code reads; the upside-down try is read by
-    the local recogniser only. An upside-down page has its page.jpg turned
-    round, so the thumbnails and the PDF are upright too.
+    the local recogniser only. A Declaration page whose heading the reader
+    finds only with the page turned round is turned round too, unless a
+    batch code was read in its corner. An upside-down page has its page.jpg
+    turned round, so the thumbnails and the PDF are upright too.
 
     With batch codes off (config.batch_codes_on) the code is not read, and
-    a page with no layout to match is kept as it was scanned.
+    a page with no layout to match is kept as it was scanned - but for a
+    Declaration page found turned round.
     """
     grey = scan_queue.load_page_grey_image(meta.page_id)
     if grey is None:
@@ -325,6 +330,14 @@ def read_ocr(meta: scan_queue.PageMeta) -> scan_queue.PageResult:
     extracted = read_student_id(cv2.cvtColor(work, cv2.COLOR_GRAY2BGR), label)
     if extracted.skipped:
         reason = extracted.skip_reason or "blank"
+        if reason == "declaration" and extracted.orientation == 180 and code.code is None:
+            # Its heading was found only with the page turned round - a sheet
+            # fed upside down - so page.jpg is turned to match, and its
+            # thumbnails and PDF are upright. A batch code read in its
+            # corner has already said which way up it is.
+            grey = cv2.rotate(grey, cv2.ROTATE_180)
+            scan_queue.replace_page_image(meta.page_id, grey)
+            reading = replace(reading, orientation=(reading.orientation + 180) % 360)
         skipped_message = {
             "blank": BLANK_MESSAGE,
             "declaration": "Declaration page, no Student ID.",
@@ -336,6 +349,7 @@ def read_ocr(meta: scan_queue.PageMeta) -> scan_queue.PageResult:
             skip_reason=reason,
             message=skipped_message,
             form_language=extracted.form_language,
+            declaration_side=reason == "declaration" and extracted.declaration_side,
         )
     student_id = extracted.student_id if looks_like_student_id(extracted.student_id) else ""
     return replace(
@@ -352,7 +366,14 @@ def read_ocr(meta: scan_queue.PageMeta) -> scan_queue.PageResult:
 def _layout_orientation(work: np.ndarray) -> int | None:
     """0 or 180, whichever way up the form's ruled layout matches better.
 
-    None when neither does (a page with no Student ID rules on it).
+    None when neither does (a page with no Student ID rules on it) - and
+    when the better match is turned round but loose, wider than
+    LAYOUT_TRUST_ERROR: an upright page can fit some ladder loosely upside
+    down, often another language's. On real scans some upright fronts
+    did, at 0.0061-0.0065 against 0.009-0.010 as they came, and some backs
+    at 0.018 against none: turned round at that word, they would be stored
+    and filed upside down. Such a page is left to its batch code, or with
+    batch codes off kept as it was scanned.
     """
     best: tuple[float, int] | None = None
     for angle in (0, 180):
@@ -360,7 +381,9 @@ def _layout_orientation(work: np.ndarray) -> int | None:
         match = identify(cv2.cvtColor(image, cv2.COLOR_GRAY2BGR))
         if match is not None and (best is None or match.error < best[0]):
             best = (match.error, angle)
-    return None if best is None else best[1]
+    if best is None or (best[1] == 180 and best[0] > LAYOUT_TRUST_ERROR):
+        return None
+    return best[1]
 
 
 def _working_copy(grey: np.ndarray) -> np.ndarray:

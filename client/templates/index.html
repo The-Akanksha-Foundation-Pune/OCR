@@ -111,7 +111,10 @@
             by hand in among what the scan folder sent, another computer or tab
             scanning for the same school at the same time, a stack for a school in the
             {{ held_stack_hours }} hours after one of its stacks had a page out of place,
-            {% endif %}or anything that needs checking still waits for you.
+            {% endif %}or anything that needs checking still waits for you.{% if not batch_codes %}
+            So does every form of a stack with a sheet scanned Declaration side first, a
+            file scanned both sides that does not pair into sheets, or such a file in
+            among other scans.{% endif %}
           </p>
           <p class="school-hint" id="auto-upload-stopped" role="status" hidden></p>
         </div>
@@ -311,7 +314,11 @@
         right before it waits there on its own, and the forms scanned with it wait for
         you to check them - as they do after a Student ID page with no Declaration page
         after it; a Declaration page the reader missed can be attached there to the
-        form straight before it.{% endif %} Check each
+        form straight before it. A file of several pages scanned both sides is paired
+        sheet by sheet - pages 1 and 2, 3 and 4, and so on - once all of it has been
+        read: each sheet's Student ID side and Declaration side are one document, the
+        Student ID side first, whichever side came first; one whose Declaration side
+        came first waits for you to check it.{% endif %} Check each
         document and press <strong>Confirm and upload</strong> - until then nothing is
         saved, and nothing goes to Drive.{% if auto_upload %} The one exception, with <strong>Upload
         matched pages automatically</strong> on: a Ready document scanned for one
@@ -358,7 +365,10 @@
               corner of every page, the same code on each page of one form.
               {% endif %}Scan into the connected scan folder, or add the files by hand.{% if not batch_codes %}
               Scan each form's Student ID page and, straight after it, its
-              Declaration page: the two are one document.{% endif %}
+              Declaration page: the two are one document. For the form printed on
+              both sides of one sheet, scan both sides into one file for each stack,
+              with skip blank pages off and double-feed detection on; for the
+              two-sheet form, one side.{% endif %}
             </p>
           </div>
         </div>
@@ -1010,9 +1020,10 @@
           `From ${downloads}, install the free <strong>PaperStream IP (TWAIN)</strong> ` +
             "driver and <strong>PaperStream Capture</strong>.",
           "In PaperStream Capture, create a profile: <strong>Output folder</strong> " +
-            "<code>Documents\\OCR Scans</code>, file type <strong>JPEG</strong> (or PDF), " +
-            "<strong>100 dpi</strong>, <strong>Black &amp; White</strong>, one side " +
-            "(<strong>simplex</strong>), paper from the <strong>document feeder</strong>.",
+            "<code>Documents\\OCR Scans</code>, file type <strong>PDF</strong> (or TIFF) with all " +
+            "of a scan's pages in one file, <strong>100 dpi</strong>, <strong>Black &amp; White</strong>, " +
+            "paper from the <strong>document feeder</strong>, <strong>multifeed detection</strong> on, " +
+            "and the sides your form needs (below).",
           "Link that profile to the scanner's Scan button with " +
             "<strong>Assign to scanner button</strong> in PaperStream Capture.",
         ];
@@ -1024,7 +1035,8 @@
           "Open <strong>Image Capture</strong> (in Applications) and choose " +
             "<strong>SP-1130N</strong>. Tick <strong>Use Document Feeder</strong>, then set " +
             "<strong>Kind</strong> Black &amp; White, <strong>Resolution</strong> 100 dpi, " +
-            "<strong>Format</strong> JPEG or TIFF, and <strong>Scan To</strong> the " +
+            "<strong>Format</strong> PDF with <strong>Combine into single document</strong> ticked, " +
+            "and <strong>Scan To</strong> the " +
             "<code>Documents/OCR Scans</code> folder (<em>Other...</em> makes one; " +
             "<strong>Show Details</strong> shows these settings if they are hidden).",
         ];
@@ -1034,7 +1046,7 @@
           "Install <strong>Document Scanner</strong> (simple-scan) and SANE - the " +
             "SP-1130N works through SANE's <code>fujitsu</code> backend.",
           "In Document Scanner, scan from the document feeder and save into the " +
-            "<code>~/OCR Scans</code> folder, as JPEG or PDF.",
+            "<code>~/OCR Scans</code> folder, as one PDF for each scan.",
         ];
         start = "press <strong>Scan</strong> in Document Scanner";
       } else if (platform === "chromeos") {
@@ -1042,21 +1054,35 @@
           "Open the <strong>Scan</strong> app from the Launcher and choose the SP-1130N, " +
             "scanning from the document feeder.",
           "Set <strong>Save to</strong> the <code>My files/OCR Scans</code> folder, and " +
-            "the file type to JPG or PDF.",
+            "the file type to PDF.",
         ];
         start = "press <strong>Scan</strong> in the Scan app";
       } else {
         steps = [
           `Install the scanner's own software - for an SP-1130N, from ${downloads}.`,
           "Make it save each scan into one folder, such as <code>OCR Scans</code>, as " +
-            "JPEG, PNG, PDF or TIFF.",
+            "one PDF or TIFF file.",
         ];
         start = "start the scan from the scanner's software";
       }
+      // Which sides: the form printed on both sides of one sheet comes in as
+      // two images a sheet, which the server pairs by their places in one
+      // file - so the stack must be one file, and no blank side may be
+      // dropped. Two sheets fed as one look like one sheet, so only the
+      // scanner can catch that. The two-sheet form is two sheets of one
+      // side each.
+      steps.push(
+        "For the form printed on <strong>both sides of one sheet</strong>, scan <strong>both sides</strong> " +
+          "(duplex) into one file for each stack, with <strong>skip blank pages</strong> off, so every sheet " +
+          "gives two images: its Student ID side and its Declaration side. Keep <strong>double-feed " +
+          "detection</strong> on: two sheets fed as one come in as one child's Student ID side and the " +
+          "next child's Declaration side, and nothing else shows it. For the <strong>two-sheet " +
+          "form</strong>, scan one side (<strong>simplex</strong>)."
+      );
       const load = BATCH_CODES
         ? "Write each form's batch code (B1-1, B1-2 ...) in its top-right corner, load " +
           `the forms with page 1 of each face down, and ${start}.`
-        : `Load the forms with page 1 of each face down, and ${start}.`;
+        : `Load the forms with page 1 of each - its Student ID page or side - face down, and ${start}.`;
       if (canWatchFolder) {
         steps.push(
           BATCH_CODES
@@ -2223,18 +2249,28 @@
       return !BATCH_CODES && (pages.length === 1 || (pages.length === 2 && isDeclaration(pages[1])));
     }
 
+    // Without batch codes, a form that is the two sides of one sheet scanned
+    // both sides, which the server paired by their places in the file.
+    function bothSides(pages) {
+      return pages.length === 2 && pages.every((page) => pageField(page, "both_sides") === true);
+    }
+
     // What one of a document's parts is called: Part 1, Part 2... - or, in
-    // a form, its Student ID page and its Declaration page.
+    // a form, its Student ID page and its Declaration page, or the Student
+    // ID side and the Declaration side of its one sheet.
     function partLabel(pages, i) {
       if (!isForm(pages)) return `Part ${i + 1}`;
+      if (bothSides(pages)) return i === 0 ? "Student ID side" : "Declaration side";
       return i === 0 ? "Student ID page" : "Declaration page";
     }
 
     // What a document is made of, for its card: "2 parts", or for a form
-    // "Student ID page + Declaration page".
+    // "Student ID page + Declaration page" - "Student ID side + Declaration
+    // side" for the two sides of one sheet.
     function partsText(doc) {
       const pages = pagesOf(doc);
       if (!isForm(pages)) return plural(partCount(doc), "part");
+      if (bothSides(pages)) return "Student ID side + Declaration side";
       return pages.length === 2 ? "Student ID page + Declaration page" : "Student ID page";
     }
 
@@ -2807,7 +2843,7 @@
         docMatch(doc),
         pagesOf(doc).map((page) => [
           pageIdOf(page), pageStatus(page), pageField(page, "code") || "",
-          pageField(page, "student_id") || "",
+          pageField(page, "student_id") || "", pageField(page, "both_sides") === true,
         ]),
       ]);
     }
@@ -3166,7 +3202,9 @@
       return JSON.stringify([
         pageStatus(page), pageField(page, "code") || "", pageField(page, "student_id") || "",
         pageField(page, "message") || "", pageField(page, "blank") === true, matchOf(page),
-        declarationsOf(page).map((entry) => [pageIdOf(entry), pageField(entry, "declaration_by") || ""]),
+        declarationsOf(page).map((entry) => [
+          pageIdOf(entry), pageField(entry, "declaration_by") || "", pageField(entry, "both_sides") === true,
+        ]),
         attachTarget(page),
       ]);
     }
@@ -3213,6 +3251,7 @@
       const id = String(pageField(page, "student_id") || "");
       const match = matchOf(page);
       const declarations = declarationsOf(page);
+      const sides = bothSides([page, ...declarations]);
       const view = newView(pageId, sig, caption, "page:" + pageId);
       view.page = page;
       const el = make("li", "ocr-doc ocr-page is-" + (skipped ? "blank" : failed ? "failed" : "attention"));
@@ -3226,7 +3265,8 @@
       const head = make("div", "ocr-doc-head");
       head.appendChild(make("span", "ocr-doc-code", BATCH_CODES ? "No code" : "No Student ID"));
       head.appendChild(
-        make("span", "ocr-doc-parts", declarations.length ? `${caption} + Declaration page` : caption)
+        make("span", "ocr-doc-parts",
+          declarations.length ? `${caption} + Declaration ${sides ? "side" : "page"}` : caption)
       );
       head.appendChild(
         make("span", "ocr-pill is-" + (skipped ? "blank" : "attention"),
@@ -3249,7 +3289,9 @@
         // The rest of its form, which needs no ID of its own.
         el.appendChild(
           make("p", "ocr-doc-reason",
-            "Its Declaration page came after it - once the Student ID is typed, both are one document.")
+            sides
+              ? "Its Declaration side is the other side of this sheet - once the Student ID is typed, both are one document."
+              : "Its Declaration page came after it - once the Student ID is typed, both are one document.")
         );
         el.appendChild(thumbStrip(view, [page, ...declarations], caption));
       }
@@ -3685,7 +3727,8 @@
         let said = `Looked up ${value} - the page becomes a document of its own in a moment.`;
         if (BATCH_CODES) said = `Looked up ${value} - type the batch code too, to put the page in its document.`;
         else if (declarationsOf(view.page).length) {
-          said = `Looked up ${value} - the page and its Declaration page become one document in a moment.`;
+          const part = bothSides([view.page, ...declarationsOf(view.page)]) ? "side" : "page";
+          said = `Looked up ${value} - the page and its Declaration ${part} become one document in a moment.`;
         }
         say(view, said, "ok");
       } catch (error) {
