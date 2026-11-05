@@ -18,8 +18,10 @@ the app ships:
     document and the PDF, whichever came first; its sheets wait until every
     page of the file is read, and one whose Declaration side came first
     needs a person's look. A file that does not pair into sheets pairs by
-    scan order like any other, and so do files of one image each and the
-    two-sheet form in one file.
+    scan order like any other, and so do files of one image each that are
+    not the numbered images of one scanner session (those pair sheet by
+    sheet too: tests/test_scan_sessions.py) and the two-sheet form in one
+    file.
   - Automatic upload: a stack of such files in plain order is clean; one
     with a sheet scanned Declaration side first, a file that does not pair
     into sheets, or such a file in among other scans waits for a person, as
@@ -664,12 +666,15 @@ def test_a_file_of_an_odd_number_of_pages_is_paired_by_scan_order(
     assert _ids(docs[_key(pages[2])]) == [pages[2]]
 
 
-def test_files_of_one_image_each_pair_by_scan_order_as_before(
+def test_files_of_one_image_each_with_no_running_number_pair_by_scan_order_as_before(
     google: FlaskClient, fake_db: Any, kids: Students
 ) -> None:
-    """A sheet sent as two files: its sides pair as the Student ID page and the Declaration page after it - or, back first, not at all."""
-    front, back = _queue(google, "Scan 1.tiff")[0], _queue(google, "Scan 2.tiff")[0]
-    later_back, later_front = _queue(google, "Scan 3.tiff")[0], _queue(google, "Scan 4.tiff")[0]
+    """A sheet sent as two files: its sides pair as the Student ID page and the Declaration page after it - or, back first, not at all.
+
+    Their names end in no number, so they are no scanner session's images.
+    """
+    front, back = _queue(google, "front.tiff")[0], _queue(google, "back.tiff")[0]
+    later_back, later_front = _queue(google, "back again.tiff")[0], _queue(google, "front again.tiff")[0]
     _id_side(front, 0)
     _declaration_side(back)
     _declaration_side(later_back)
@@ -770,7 +775,8 @@ def test_a_file_scanned_both_sides_in_among_other_scans_keeps_its_stack_waiting_
     sheet = _file(google, 2, "Scan 1.tif")
     _id_side(sheet[0], 0)
     _declaration_side(sheet[1])
-    front, back = _queue(google, "Scan 2.tiff")[0], _queue(google, "Scan 3.tiff")[0]
+    # One image each, named with no running number: no scanner session.
+    front, back = _queue(google, "front.tiff")[0], _queue(google, "back.tiff")[0]
     _id_side(front, 1)
     _declaration_side(back)
     _later(SETTLE + 1)
@@ -800,13 +806,16 @@ def test_page_says_to_scan_the_one_sheet_form_both_sides_and_the_two_sheet_form_
     for told in (
         (
             "For the form printed on both sides of one sheet, scan both sides into one file for each stack, with"
-            " skip blank pages off and double-feed detection on; for the two-sheet form, one side."
+            " skip blank pages off and double-feed detection on - numbered images saved one a side are paired"
+            f" too, once no more have come for {config.STACK_SETTLE_MINUTES} minutes; for the two-sheet form,"
+            " one side."
         ),
         (
             "A file of several pages scanned both sides is paired sheet by sheet - pages 1 and 2, 3 and 4, and so"
-            " on - once all of it has been read: each sheet's Student ID side and Declaration side are one"
-            " document, the Student ID side first, whichever side came first; one whose Declaration side came"
-            " first waits for you to check it."
+            " on - once all of it has been read, and so are the numbered images a scanner saves one a side, by"
+            f" their numbers, once no more have come for {config.STACK_SETTLE_MINUTES} minutes: each sheet's"
+            " Student ID side and Declaration side are one document, the Student ID side first, whichever side"
+            " came first; one whose Declaration side came first waits for you to check it."
         ),
         (
             "So does every form of a stack with a sheet scanned Declaration side first, a file scanned both sides"
@@ -841,14 +850,16 @@ def test_page_scanner_setup_says_which_sides_to_scan(
     sides = (
         "For the form printed on <strong>both sides of one sheet</strong>, scan <strong>both sides</strong> (duplex)"
         " into one file for each stack, with <strong>skip blank pages</strong> off, so every sheet gives two images:"
-        " its Student ID side and its Declaration side. Keep <strong>double-feed detection</strong> on: two sheets"
-        " fed as one come in as one child's Student ID side and the next child's Declaration side, and nothing"
-        " else shows it. For the <strong>two-sheet form</strong>, scan one side (<strong>simplex</strong>)."
+        " its Student ID side and its Declaration side. Numbered images saved one a side are paired sheet by sheet"
+        f" too, once no more have come for {config.STACK_SETTLE_MINUTES} minutes. Keep <strong>double-feed"
+        " detection</strong> on: two sheets fed as one come in as one child's Student ID side and the next child's"
+        " Declaration side, and nothing else shows it. For the <strong>two-sheet form</strong>, scan one side"
+        " (<strong>simplex</strong>)."
     )
     assert sides in out
     assert "Load the forms with page 1 of each - its Student ID page or side - face down" in out
-    # One file for each scan, never one image a side: only a file of
-    # several pages is paired sheet by sheet.
+    # One file for each scan is still what the steps ask for: numbered
+    # images one a side are paired too, but only once the scan has finished.
     assert "JPEG" not in out and "JPG" not in out
     if navigator["platform"] == "Win32":
         # The profile leaves the sides to the step after the button.

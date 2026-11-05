@@ -31,24 +31,27 @@ read by OCR or typed by a person - and the Declaration page scanned
 straight after it, which has none (_pair). The two are one document, keyed
 "P" and the Student ID page's id, and go to Drive as one PDF,
 <Name>_<ID>.pdf, the Student ID page first. A form printed on both sides of
-one sheet, scanned both sides into one file of several pages, comes as two
-pages a sheet - its Student ID side and its Declaration side, whose heading
-is part way down - and those pair by their places in the file, in either
-order, the Student ID side first in the document and the PDF, once the
-whole file has been read (_sheets); one whose Declaration side came first
-needs a person's look. A file that breaks that anywhere, and every file of
-one page, pairs by scan order like any other. A form whose first page has no
-Student ID waits under Unsorted, its Declaration page with it, until one is
-typed. A Declaration page that joins no form waits under Unsorted on its
-own, and holds every form of its run for a person: the stack may be out of
-order or missing a page. So does a form's first page with no Declaration
-page between it and the next form's (_check_steps), and a held run holds
-the run that may be the rest of its stack (_carry_on). A Student ID page
-with nothing after it yet waits a little for its Declaration page before it
-can be confirmed alone. A Declaration page the reader did not recognise can
-be attached to the form straight before it by a person
-(set_page_declaration). A code read while codes were on is not looked at,
-and documents confirmed with a code are still listed.
+one sheet, scanned both sides, comes as two pages a sheet - its Student ID
+side and its Declaration side, whose heading is part way down - in one file
+of several pages, or as the numbered images of one scanner session, saved
+one a side (scan_session), and those pair by their places in the file or
+their numbers in the session, in either order, the Student ID side first in
+the document and the PDF, once the whole file has been read or the
+session's run has finished (_sheets); one whose Declaration side came first
+needs a person's look. A file or session that breaks that anywhere, and
+every other file of one page, pairs by scan order like any other. A form
+whose first page has no Student ID waits under Unsorted, its Declaration
+page with it, until one is typed. A Declaration page that joins no form
+waits under Unsorted on its own, and holds every form of its run for a
+person: the stack may be out of order or missing a page. So does a form's
+first page with no Declaration page between it and the next form's
+(_check_steps), and a held run holds the run that may be the rest of its
+stack (_carry_on). A Student ID page with nothing after it yet waits a
+little for its Declaration page before it can be confirmed alone. A
+Declaration page the reader did not recognise can be attached to the form
+straight before it by a person (set_page_declaration). A code read while
+codes were on is not looked at, and documents confirmed with a code are
+still listed.
 
 With Upload matched pages automatically on, the scan page confirms some
 documents itself, nobody pressing Confirm: those listed as auto_upload -
@@ -63,8 +66,9 @@ same way - and is decided by its whole stack, never by the form alone
 is finished (nothing new for STACK_SETTLE_MINUTES, every page read),
 clean (Student ID page, Declaration page, by turns from first to last,
 all sent the same way, nothing out of place, nothing corrected by hand; of
-files scanned both sides, no sheet that came Declaration side first, no file
-that does not pair into sheets, and no other scans in among them)
+files and scanner sessions scanned both sides, no sheet that came
+Declaration side first, none that does not pair into sheets, and no other
+scans in among them)
 and alone (no other scan page sending for its school around it, no held
 stack before it from its own, nor one for its school from any in the
 HELD_STACK_HOURS before it). It is the same confirm, made in the person's
@@ -80,6 +84,7 @@ from __future__ import annotations
 import bisect
 import contextlib
 import io
+import posixpath
 import re
 import secrets
 import time
@@ -201,11 +206,19 @@ _SETTLING = "its stack may still go on"
 # How a stack's verdict starts out, before _judge_stack has looked at it.
 _NOT_JUDGED = "its stack has not been looked at"
 # Batch codes off: what a sheet scanned both sides says while its file still
-# has a page to be read (_documents_by_page).
+# has a page to be read, or while its scanner session may still grow
+# (_documents_by_page).
 _REST_OF_FILE = (
     "Waiting for the rest of its file to be read - a file scanned both sides is paired sheet by sheet"
     " only once every page of it has been."
 )
+_REST_OF_SCAN = (
+    "Waiting for the rest of its scan - images saved one a side are paired sheet by sheet once no more"
+    f" have come for {STACK_SETTLE_MINUTES} minutes."
+)
+# A scanner's running number at the end of a file's name, before its
+# extension (scan_session): a separator and digits, or digits in brackets.
+_SESSION_NUMBER = re.compile(r"(?P<stem>.+?)(?:[_\- ](?P<number>[0-9]{1,6})|[_\- ]?\((?P<bracketed>[0-9]{1,6})\))")
 _RUN_GAP_NS = RUN_GAP_MINUTES * 60 * 1_000_000_000
 _DECLARATION_WAIT_NS = DECLARATION_WAIT_SECONDS * 1_000_000_000
 _STACK_SETTLE_NS = STACK_SETTLE_MINUTES * 60 * 1_000_000_000
@@ -319,8 +332,8 @@ class PageView:
     # (scan_queue.PageResult.declaration_side).
     declaration_side: bool = False
     # Batch codes off: one side of a sheet scanned both sides, paired with
-    # its other side by their places in their file (_sheets); False until
-    # the pairing has looked.
+    # its other side by their places in their file, or their numbers in
+    # their scanner session (_sheets); False until the pairing has looked.
     both_sides: bool = False
     # Batch codes off, under Unsorted: the Declaration page of this page's
     # form, shown with it until its Student ID is typed (_documents_by_page).
@@ -447,10 +460,13 @@ class Document:
     # Batch codes off, set by _documents_by_page: why its run is held, if it
     # is (ORPHAN_IN_STACK, GAP_IN_STACK or AFTER_HELD_STACK; _pair); how many
     # pages of any kind came between its Student ID page and its Declaration
-    # page in its run; and what its whole stack says about going up by
-    # itself, as of the look that made it (_judge_stack).
+    # page in its run; for a sheet scanned both sides, whether its
+    # Declaration side came first in its file or scanner session (_sheets);
+    # and what its whole stack says about going up by itself, as of the look
+    # that made it (_judge_stack).
     held: str = ""
     between: int = 0
+    declaration_first: bool = False
     stack: StackVerdict = field(default_factory=StackVerdict)
 
     @property
@@ -810,10 +826,12 @@ def _documents_by_page(
     before is still to be read is listed with that page's form once it is,
     as is a side of a sheet scanned both sides once its other side is read.
     A sheet scanned both sides waits, with no Confirm to press, until every
-    page of its file has been read: the rest may yet show that the file does
-    not pair into sheets (_sheets). A code read while batch codes were on is
-    not looked at. Each form carries what its whole stack says about going
-    up by itself (_judge_stack).
+    page of its file has been read - or, saved one image a side, until its
+    run has finished, as more images may yet join its scanner session: the
+    rest may yet show that the file or the session does not pair into
+    sheets (_sheets). A code read while batch codes were on is not looked
+    at. Each form carries what its whole stack says about going up by
+    itself (_judge_stack).
 
     Args:
         open_views: The person's open pages.
@@ -829,8 +847,13 @@ def _documents_by_page(
     """
     open_ids = {view.page_id for view in open_views}
     runs = _runs(every_page)
-    pairing = _pair(runs, open_ids, firsts)
-    verdicts = _judge_stacks(runs, pairing, every_page, now_ns, unseen, storing)
+    # What each run still waits for before it has finished: its stack goes
+    # up by itself only then - and a scanner session in it is paired for
+    # good once nothing more can join the run itself.
+    coming = [_still_to_come(run, now_ns, unseen, storing) for run in runs]
+    finished = [not _still_to_come(run, now_ns, unseen, storing, beside=False).refusal for run in runs]
+    pairing = _pair(runs, open_ids, firsts, finished)
+    verdicts = _judge_stacks(runs, pairing, every_page, now_ns, coming)
     open_docs: list[Document] = []
     unsorted: list[PageView] = []
     for view in open_views:
@@ -863,11 +886,13 @@ def _documents_by_page(
                 # The two sides of a sheet scanned both sides may come either
                 # way round, with nothing between them.
                 doc.between = abs(pairing.index_of[declaration.page_id] - at) - 1
+                doc.declaration_first = view.page_id in pairing.swapped
             if not parts:
                 waiting = _waiting_for_declaration(view, run, at, now_ns, pairing.waiting)
             elif view.page_id in pairing.unsettled:
-                # Its file may yet turn out not to pair into sheets.
-                waiting = _REST_OF_FILE
+                # Its file may yet turn out not to pair into sheets, or its
+                # scanner session grow.
+                waiting = pairing.unsettled[view.page_id]
             else:
                 waiting = ""
             _judge_page(doc, done, waiting)
@@ -963,6 +988,36 @@ def _scan_page(sender: str) -> str:
     return sender.split("-", 1)[0]
 
 
+def scan_session(source_name: str) -> tuple[str, int] | None:
+    """Which scanner session a file's name puts it in, and its number there - None for a name with no number at its end.
+
+    A scanner that saves a scan one image a side numbers the images of one
+    scan in turn: 20260101120000_0001.jpg, 20260101120000_0002.jpg ... - or
+    Scan 1.jpeg, Scan 2.jpeg ..., IMG-0042.JPG, page (3).png. Such a name,
+    without its extension, is a stem of at least one character, then an
+    underscore, a hyphen or a space and one to six digits, or the digits in
+    brackets. The images of one session share the stem and the extension,
+    compared case-insensitively. Any other name - 20260101115900.jpg,
+    scan.jpg - is in no session. Only the name is looked at: whether such
+    images are one session is for the pairing to say (_sheets).
+
+    Args:
+        source_name: The file's name as the person's computer had it
+            (PageView.source_name).
+
+    Returns:
+        (key, number): the stem and the extension, case-folded, as the
+        session's key - "20260101120000.jpg", "scan.jpeg" - and the image's
+        number in it, as a number; None when the name ends in no number.
+    """
+    stem, extension = posixpath.splitext(source_name or "")
+    found = _SESSION_NUMBER.fullmatch(stem)
+    if found is None:
+        return None
+    number = found.group("number") or found.group("bracketed")
+    return (found.group("stem") + extension).casefold(), int(number)
+
+
 @dataclass
 class _Pairing:
     """How a person's pages pair up in their runs (batch codes off, _pair)."""
@@ -985,14 +1040,19 @@ class _Pairing:
     # or AFTER_HELD_STACK. Every form in one may be paired wrongly.
     held: dict[int, str] = field(default_factory=dict)
     # A page of a sheet scanned both sides -> its other side, paired by
-    # their places in their file (_sheets).
+    # their places in their file, or by their numbers in their scanner
+    # session (_sheets).
     sides: dict[str, PageView] = field(default_factory=dict)
-    # Sides read whose other side is still to be read: not shown yet, and
+    # Sides read whose other side is still to be read - or, in a scanner
+    # session that may still grow, has not come yet: not shown yet, and
     # taken as still being read themselves.
     waiting: set[str] = field(default_factory=set)
-    # The sides of `sides` whose file still has a page to be read: it may yet
-    # not pair into sheets, so their forms wait (_documents_by_page).
-    unsettled: set[str] = field(default_factory=set)
+    # The sides of `sides` whose file still has a page to be read, or whose
+    # scanner session may still grow -> what their forms say while they wait:
+    # it may yet not pair into sheets (_documents_by_page).
+    unsettled: dict[str, str] = field(default_factory=dict)
+    # The Student ID sides of `sides` whose Declaration side came first.
+    swapped: set[str] = field(default_factory=set)
     # The runs whose files scanned both sides keep every form of them from
     # going up by itself, each with why (_sheets).
     sheet_faults: dict[int, str] = field(default_factory=dict)
@@ -1000,89 +1060,123 @@ class _Pairing:
 
 @dataclass
 class _Sheets:
-    """How the files of one run pair by place (batch codes off, _sheets)."""
+    """How the files and scanner sessions of one run pair by place (batch codes off, _sheets)."""
 
     sides: dict[str, PageView] = field(default_factory=dict)
     waiting: set[str] = field(default_factory=set)
-    unsettled: set[str] = field(default_factory=set)
+    unsettled: dict[str, str] = field(default_factory=dict)
+    swapped: set[str] = field(default_factory=set)
     fault: str = ""
 
 
-# How one file of a run pairs (_file_sheets): by place, every page read
-# (SHEETS) or some still to be read (READING); not by place, as it breaks the
-# rule (BROKEN); or by scan order like any other file (OTHER).
+# How one file or scanner session of a run pairs (_file_sheets,
+# _session_sheets): by place, every page read and nothing more to come
+# (SHEETS) or not yet (READING); not by place, as it breaks the rule
+# (BROKEN); or by scan order like any other file (OTHER).
 _SHEETS = "sheets"
 _READING = "reading"
 _BROKEN = "broken"
 _OTHER = "other"
 
 
-def _sheets(run: list[PageView], open_ids: set[str], firsts: set[str]) -> _Sheets:
-    """With batch codes off: pair the two sides of each sheet of a run's files scanned both sides, by place.
+def _sheets(run: list[PageView], open_ids: set[str], firsts: set[str], finished: bool) -> _Sheets:
+    """With batch codes off: pair each sheet's two sides, by place, in a run's files and sessions scanned both sides.
 
-    A form printed on both sides of one sheet, scanned both sides into one
-    file, comes in as two pages a sheet - pages 1 and 2, 3 and 4 and so on -
-    one its Student ID side and the other its Declaration side: the back,
-    its heading part way down (PageView.declaration_side). A sheet fed the
-    other way up comes Declaration side first. So once a page of a file of
-    several pages is read as a Declaration side, the file pairs by place,
-    whichever side of each sheet came first (_file_sheets); its other files,
-    and every file of one page, pair by scan order (_pair).
+    A form printed on both sides of one sheet, scanned both sides, comes in
+    as two images a sheet, one its Student ID side and the other its
+    Declaration side: the back, its heading part way down
+    (PageView.declaration_side). Saved into one file, they are its pages 1
+    and 2, 3 and 4 and so on. Saved one image a side, the images one sender
+    sent of one scanner session (scan_session) are taken as one file, in the
+    order of their numbers, not of their coming: from the lowest number, the
+    first two, the next two and so on. A sheet fed the other way up comes
+    Declaration side first. So once a page of a file of several pages, or an
+    image of a session of several, is read as a Declaration side, it pairs
+    by place, whichever side of each sheet came first (_file_sheets,
+    _session_sheets); its run's other files, and every other file of one
+    page, pair by scan order (_pair).
 
     No form of the run goes up by itself (fault) with a sheet scanned
-    Declaration side first, a file scanned both sides that breaks the rule
-    and so is paired by scan order, or a file scanned both sides in among
-    other scans - a page scanned on its own, or a file with no Declaration
-    side: those wait for a person. While a file still has a page to be read
-    its sheets so far are paired only for the look (unsettled): the rest
-    may yet break the rule, so none of their forms can be confirmed yet.
+    Declaration side first, a file or session scanned both sides that breaks
+    the rule and so is paired by scan order, or one scanned both sides in
+    among other scans - a page scanned on its own, or a file or session with
+    no Declaration side: those wait for a person. While a file still has a
+    page to be read, or a session's run has not finished - more images may
+    yet join it - its sheets so far are paired only for the look
+    (unsettled): the rest may yet break the rule, so none of their forms can
+    be confirmed yet.
 
     Args:
         run: The run, in scan order.
         open_ids: The open pages; every other is confirmed.
         firsts: The first page of each confirmed document.
+        finished: The run has finished: every page of it read, and nothing
+            more can join it (_still_to_come).
     """
-    files: dict[tuple[int, str, int, str], list[PageView]] = {}
+    # Each file, or session, with each page's place in it.
+    groups: dict[tuple[Any, ...], list[tuple[int, PageView]]] = {}
     for page in run:
-        files.setdefault((page.received_ns, page.source_name, page.source_pages, page.sender), []).append(page)
+        session = _session_of(page)
+        if session is None:
+            key: tuple[Any, ...] = ("file", page.received_ns, page.source_name, page.source_pages, page.sender)
+            place = page.source_page
+        else:
+            key, place = ("session", page.sender, session[0]), session[1]
+        groups.setdefault(key, []).append((place, page))
     found = _Sheets()
     kinds: list[str] = []
-    swapped = False
-    for pages in files.values():
-        kind, sheets, waiting = _file_sheets(pages, open_ids, firsts)
+    others = False
+    for key, placed in groups.items():
+        pages = [page for _place, page in placed]
+        if key[0] == "session":
+            kind, sheets, waiting = _session_sheets(placed, open_ids, firsts, finished)
+            why = _REST_OF_SCAN
+        else:
+            kind, sheets, waiting = _file_sheets(pages, open_ids, firsts)
+            why = _REST_OF_FILE
         kinds.append(kind)
-        for first, declaration in sheets:
+        for first, declaration, declaration_first in sheets:
             found.sides[first.page_id] = declaration
             found.sides[declaration.page_id] = first
-            swapped = swapped or declaration.order < first.order
+            if declaration_first:
+                found.swapped.add(first.page_id)
             if kind == _READING:
-                found.unsettled.update((first.page_id, declaration.page_id))
+                found.unsettled.update({first.page_id: why, declaration.page_id: why})
         found.waiting.update(page.page_id for page in waiting)
-    # A file of several pages with some still to be read may yet turn out
-    # to be scanned both sides; one of a single page never does.
-    others = [
-        kind == _OTHER and (len(pages) == 1 or not any(page.unread for page in pages))
-        for kind, pages in zip(kinds, files.values())
-    ]
+        # A file or session of several pages with some still to be read may
+        # yet turn out to be scanned both sides; one of a single page never
+        # does.
+        others = others or (kind == _OTHER and (len(pages) == 1 or not any(page.unread for page in pages)))
     if _BROKEN in kinds:
         found.fault = _UNPAIRED_SIDES
-    elif swapped:
+    elif found.swapped:
         found.fault = _SWAPPED_SHEET
-    elif (_SHEETS in kinds or _READING in kinds) and any(others):
+    elif (_SHEETS in kinds or _READING in kinds) and others:
         found.fault = _MIXED_SIDES
     return found
 
 
+def _session_of(page: PageView) -> tuple[str, int] | None:
+    """The scanner session a page is an image of, and its number there (scan_session) - or None.
+
+    Only a file of one image, sent by a scan page - from its scan folder or
+    added by hand there - can be one of a session's images: one sent with no
+    sender, by an older page, is not.
+    """
+    if page.source_pages != 1 or not page.sender:
+        return None
+    return scan_session(page.source_name)
+
+
 def _file_sheets(
     pages: list[PageView], open_ids: set[str], firsts: set[str]
-) -> tuple[str, list[tuple[PageView, PageView]], list[PageView]]:
+) -> tuple[str, list[tuple[PageView, PageView, bool]], list[PageView]]:
     """How one file's pages pair (_sheets): its kind, its sheets so far, and the sides waiting for theirs.
 
     It pairs by place once one of its pages is read as a Declaration side,
     while it has an even number of pages, all of them in the look, and each
     sheet read so far is one Student ID side and one Declaration side, both
-    open or both confirmed together - its Student ID side the first page of
-    a confirmed document, its Declaration side not. A side read whose other
+    open or both confirmed together (_place_pairs). A side read whose other
     side is still to be read waits for it, and the sheets read so far wait
     for the rest of the file (READING). A file that breaks any of that is
     not paired by place at all: its pages pair by scan order, like any
@@ -1095,33 +1189,111 @@ def _file_sheets(
 
     Returns:
         SHEETS or READING with each sheet as (Student ID side, Declaration
-        side) and the sides waiting; BROKEN or OTHER with neither.
+        side, whether its Declaration side came first) and the sides
+        waiting; BROKEN or OTHER with neither.
     """
     total = pages[0].source_pages
-    if total < 2 or not any(not page.unread and _side_of(page) == "declaration" for page in pages):
+    if total < 2 or not _has_declaration_side(pages):
         return _OTHER, [], []
     if total % 2 or [page.source_page for page in pages] != list(range(1, total + 1)):
         return _BROKEN, [], []
-    sheets: list[tuple[PageView, PageView]] = []
-    waiting: list[PageView] = []
-    for one, two in zip(pages[::2], pages[1::2]):
-        if one.unread or two.unread:
-            waiting += [page for page in (one, two) if not page.unread]
-            continue
-        sides = {_side_of(one): one, _side_of(two): two}
-        if set(sides) != {"id", "declaration"}:
-            return _BROKEN, [], []
-        first, declaration = sides["id"], sides["declaration"]
-        if (first.page_id in open_ids) != (declaration.page_id in open_ids):
-            return _BROKEN, [], []
-        if first.page_id not in open_ids and (first.page_id not in firsts or declaration.page_id in firsts):
-            return _BROKEN, [], []
-        sheets.append((first, declaration))
+    paired = _place_pairs(list(zip(pages[::2], pages[1::2])), open_ids, firsts)
+    if paired is None:
+        return _BROKEN, [], []
+    sheets, waiting = paired
     return (_READING if any(page.unread for page in pages) else _SHEETS), sheets, waiting
 
 
+def _session_sheets(
+    placed: list[tuple[int, PageView]], open_ids: set[str], firsts: set[str], finished: bool
+) -> tuple[str, list[tuple[PageView, PageView, bool]], list[PageView]]:
+    """How one scanner session's images pair (_sheets): its kind, its sheets so far, and the sides waiting for theirs.
+
+    As a file's pages do (_file_sheets), by their numbers instead of their
+    places in a file: once one of its images is read as a Declaration side,
+    it pairs by place while no number comes twice and each two from the
+    lowest number on - that number and the next, and so on - are one
+    Student ID side and one Declaration side, both open or both confirmed
+    together (_place_pairs). Until its run has finished (`finished`) more
+    images may yet join it, so its sheets so far wait (READING), and an
+    image whose other side has not come, or not been read, waits for it.
+    Once it has, it must also be an even number of images, their numbers
+    running on with no gap. A session that breaks any of that pairs by scan
+    order, like any other file; and so does one of a single image, or with
+    no Declaration side - the two-sheet form, say.
+
+    Args:
+        placed: The session's images in the look, each with its number.
+        open_ids: The open pages; every other is confirmed.
+        firsts: The first page of each confirmed document.
+        finished: Its run has finished (_still_to_come).
+
+    Returns:
+        As _file_sheets.
+    """
+    placed = sorted(placed, key=lambda item: (item[0], item[1].order))
+    pages = [page for _number, page in placed]
+    if len(pages) < 2 or not _has_declaration_side(pages):
+        return _OTHER, [], []
+    numbers = [number for number, _page in placed]
+    lowest = numbers[0]
+    if len(set(numbers)) < len(numbers) or (
+        finished and (len(numbers) % 2 or numbers != list(range(lowest, lowest + len(numbers))))
+    ):
+        return _BROKEN, [], []
+    # Each sheet's two places, from the lowest number on; a place not come
+    # yet is None.
+    places: dict[int, list[PageView | None]] = {}
+    for number, page in placed:
+        places.setdefault((number - lowest) // 2, [None, None])[(number - lowest) % 2] = page
+    paired = _place_pairs([(one, two) for _sheet, (one, two) in sorted(places.items())], open_ids, firsts)
+    if paired is None:
+        return _BROKEN, [], []
+    sheets, waiting = paired
+    return (_SHEETS if finished else _READING), sheets, waiting
+
+
+def _has_declaration_side(pages: list[PageView]) -> bool:
+    """Whether a page that has been read is a Declaration side (_side_of)."""
+    return any(not page.unread and _side_of(page) == "declaration" for page in pages)
+
+
+def _place_pairs(
+    pairs: list[tuple[PageView | None, PageView | None]], open_ids: set[str], firsts: set[str]
+) -> tuple[list[tuple[PageView, PageView, bool]], list[PageView]] | None:
+    """Each two places of a file or session as one sheet (_file_sheets, _session_sheets) - None when one is not.
+
+    Two places read are a sheet when one is a Student ID side and the other
+    a Declaration side, in either order, both open or both confirmed
+    together - its Student ID side the first page of a confirmed document,
+    its Declaration side not. A side read whose other side is still to be
+    read, or has not come (None), waits for it.
+
+    Returns:
+        Each sheet as (Student ID side, Declaration side, whether its
+        Declaration side came first), and the sides waiting; None when two
+        places read are not one sheet.
+    """
+    sheets: list[tuple[PageView, PageView, bool]] = []
+    waiting: list[PageView] = []
+    for one, two in pairs:
+        if one is None or two is None or one.unread or two.unread:
+            waiting += [page for page in (one, two) if page is not None and not page.unread]
+            continue
+        sides = {_side_of(one): one, _side_of(two): two}
+        if set(sides) != {"id", "declaration"}:
+            return None
+        first, declaration = sides["id"], sides["declaration"]
+        if (first.page_id in open_ids) != (declaration.page_id in open_ids):
+            return None
+        if first.page_id not in open_ids and (first.page_id not in firsts or declaration.page_id in firsts):
+            return None
+        sheets.append((first, declaration, declaration is one))
+    return sheets, waiting
+
+
 def _side_of(page: PageView) -> str:
-    """Which side of a sheet scanned both sides a page that has been read is (_file_sheets).
+    """Which side of a sheet scanned both sides a page that has been read is (_place_pairs).
 
     "declaration" for a Declaration page the reader recognised by its
     heading part way down, nobody having typed a Student ID on it; "id" for
@@ -1138,15 +1310,28 @@ def _side_of(page: PageView) -> str:
 
 
 def _in_sheet_order(run: list[PageView], sides: dict[str, PageView]) -> list[PageView]:
-    """A run in scan order, but with each sheet scanned both sides Student ID side first (_sheets)."""
-    pages = list(run)
-    for at in range(len(pages) - 1):
-        if sides.get(pages[at].page_id) is pages[at + 1] and _is_declaration(pages[at]):
-            pages[at], pages[at + 1] = pages[at + 1], pages[at]
+    """A run in scan order, but with each sheet scanned both sides together, Student ID side first (_sheets).
+
+    Each sheet goes where the first of its two sides came: the two sides of a
+    file's sheet come one straight after the other, but those of a scanner
+    session's sheet - paired by their numbers - need not have.
+    """
+    pages: list[PageView] = []
+    placed: set[str] = set()
+    for page in run:
+        if page.page_id in placed:
+            continue
+        other = sides.get(page.page_id)
+        if other is None:
+            pages.append(page)
+            continue
+        sheet = [other, page] if _is_declaration(page) else [page, other]
+        pages += sheet
+        placed.update(side.page_id for side in sheet)
     return pages
 
 
-def _pair(runs: list[list[PageView]], open_ids: set[str], firsts: set[str]) -> _Pairing:
+def _pair(runs: list[list[PageView]], open_ids: set[str], firsts: set[str], finished: list[bool]) -> _Pairing:
     """With batch codes off: pair each Declaration page with the form before it, inside its run.
 
     Each form is two sheets scanned one straight after the other: the page
@@ -1165,24 +1350,28 @@ def _pair(runs: list[list[PageView]], open_ids: set[str], firsts: set[str]) -> _
     and for a held run it may be the rest of (_carry_on).
 
     The two sides of each sheet of a file scanned both sides pair by their
-    places in the file instead, in either order (_sheets): the Declaration
-    side joins its sheet's Student ID side, and what comes after the sheet
-    comes after a form that has its Declaration page. A side whose other
-    side is still to be read waits, like a page still being read, and so
-    does a sheet whose file has a page still to be read (unsettled).
+    places in the file instead, in either order, and those of a scanner
+    session's sheet by their numbers (_sheets): the Declaration side joins
+    its sheet's Student ID side, and what comes after the sheet comes after
+    a form that has its Declaration page. A side whose other side is still
+    to be read, or has not come, waits, like a page still being read, and
+    so does a sheet whose file has a page still to be read or whose session
+    may still grow (unsettled).
 
     Args:
         runs: The person's runs (_runs).
         open_ids: The open pages; every other is confirmed.
         firsts: The first page of each confirmed document.
+        finished: For each run, whether it has finished (_still_to_come).
     """
     pairing = _Pairing()
     for number, run in enumerate(runs):
         _drop_stale_attachments(run, open_ids)
-        sheets = _sheets(run, open_ids, firsts)
+        sheets = _sheets(run, open_ids, firsts, finished[number])
         pairing.sides.update(sheets.sides)
         pairing.waiting.update(sheets.waiting)
         pairing.unsettled.update(sheets.unsettled)
+        pairing.swapped.update(sheets.swapped)
         if sheets.fault:
             pairing.sheet_faults[number] = sheets.fault
         before: PageView | None = None  # the last page that is not blank
@@ -1397,8 +1586,7 @@ def _judge_stacks(
     pairing: _Pairing,
     every_page: list[PageView],
     now_ns: int,
-    unseen: bool,
-    storing: list[scan_queue.Storing | None],
+    coming: list[StackVerdict],
 ) -> list[StackVerdict]:
     """With batch codes off: whether the forms of each stack may go up by themselves, run by run.
 
@@ -1424,11 +1612,13 @@ def _judge_stacks(
         attached or taken off. A stack fed Declaration page first begins or
         ends with a page out of place, so this alone keeps it back, as well
         as one whose first child returned only the Student ID page, or with
-        a cover sheet on top. A file scanned both sides is clean only as its
-        sheets came, every one Student ID side first, in a stack of nothing
-        but such files: not with a sheet fed the other way up, a file of
-        them that does not pair into sheets, or other scans in among them
-        (_sheets).
+        a cover sheet on top. A file or scanner session scanned both sides
+        is clean only as its sheets came, every one Student ID side first,
+        in a stack of nothing but such files and sessions: not with a sheet
+        fed the other way up, one of them that does not pair into sheets,
+        or other scans in among them (_sheets). A session's images are
+        still looked at in the order they came, so one whose images came
+        out of the order of their numbers is not clean.
       - Alone: no page for the same school and city from any other scan
         page - another computer, another tab, a file added by hand there, an
         older page with no id, a late retry from an old tab - reached the
@@ -1442,9 +1632,9 @@ def _judge_stacks(
 
     What scan order cannot show is still not shown: two Student ID pages or
     two Declaration pages swapped, or two faults that cancel out into a
-    stack that takes turns as it should - nor, in a file scanned both
-    sides, two sheets fed as one, whose outer sides come in as one sheet
-    (_sheets). Nor is what a pause longer than STACK_SETTLE_MINUTES cuts
+    stack that takes turns as it should - nor, in a file or session
+    scanned both sides, two sheets fed as one, whose outer sides come in as
+    one sheet (_sheets). Nor is what a pause longer than STACK_SETTLE_MINUTES cuts
     off: a stack is judged as it stands once it has settled, so when such a
     pause - or the rest sent after that long from the page loaded again, or
     the other computer - cuts off the page that would have shown a fault,
@@ -1456,14 +1646,14 @@ def _judge_stacks(
         runs: The person's runs (_runs), and `pairing` how they pair (_pair).
         every_page: Every page the runs are made of, in scan order.
         now_ns: The look's clock (epoch ns).
-        unseen: A listed page of the person's could not be read, and
-            `storing` the scans still being stored (_documents_by_page).
+        coming: What each run still waits for before it has finished
+            (_still_to_come).
     """
     arrived = [page.received_ns for page in every_page]
     # The runs with a page still to be read: what they are is not known yet.
     reading = {number for number, run in enumerate(runs) if any(page.unread for page in run)}
     return [
-        _judge_stack(number, runs, pairing, every_page, arrived, reading, now_ns, unseen, storing)
+        _judge_stack(number, runs, pairing, every_page, arrived, reading, now_ns, coming[number])
         for number in range(len(runs))
     ]
 
@@ -1476,10 +1666,13 @@ def _judge_stack(
     arrived: list[int],
     reading: set[int],
     now_ns: int,
-    unseen: bool,
-    storing: list[scan_queue.Storing | None],
+    coming: StackVerdict,
 ) -> StackVerdict:
-    """Whether the forms of one stack may go up by themselves (_judge_stacks): what waits for a person first."""
+    """Whether the forms of one stack may go up by themselves (_judge_stacks): what waits for a person first.
+
+    `coming` is what its run still waits for before it has finished
+    (_still_to_come).
+    """
     run = runs[number]
     first, last = run[0], run[-1]
     if number in pairing.held:
@@ -1512,35 +1705,84 @@ def _judge_stack(
         for page in every_page[start:end]
     ):
         return StackVerdict(_NOT_ALONE)
-    settled = now_ns - last.received_ns >= _STACK_SETTLE_NS
-    if len(run) % 2 and settled and not last.unread:
+    if len(run) % 2 and _settled(run, now_ns) and not last.unread:
         return StackVerdict(_ENDS_WITH_ID)
 
-    # Nothing in it waits for a person yet; what is left may clear by itself.
+    # Nothing in it waits for a person yet; what is left may clear by itself:
+    # first what may still come or be read - for anything but time alone.
+    if coming.refusal and not coming.settles_at:
+        return coming
     scan_page = _scan_page(first.sender)
     own = [
         earlier for earlier in range(number) if scan_page and _scan_page(runs[earlier][0].sender) == scan_page
     ]
-    if any(page.unread for page in run):
-        return StackVerdict(_STILL_READING, True)
-    if unseen:
-        return StackVerdict(_UNSEEN, True)
-    if any(
-        scan is None or _scan_page(scan.sender) == scan_page or (scan.school, scan.location) in places
-        for scan in storing
-    ):
-        # From its scan page it may be more of it, and for its school and
-        # city it may be beside it; one not known may be either.
-        return StackVerdict(_STILL_STORING, True)
     if reading.intersection(own + holders):
         # It may yet turn out to be held, and this one to go on from it.
         return StackVerdict(_EARLIER_READING, True)
     if len(run) % 2:
         return StackVerdict(_ENDS_WITH_ID_SO_FAR, True)
-    if not settled:
-        # Only time is left: when it goes up if nothing else comes.
+    # Only time may be left: when it goes up if nothing else comes.
+    return coming
+
+
+def _still_to_come(
+    run: list[PageView],
+    now_ns: int,
+    unseen: bool,
+    storing: list[scan_queue.Storing | None],
+    beside: bool = True,
+) -> StackVerdict:
+    """With batch codes off: what a run still waits for, with nobody doing anything, before it has finished.
+
+    A run has finished once nothing can join it or change what it is: every
+    page of it has been read; no page of the person's that may be part of
+    it, or beside it, is missing from the look - a scan still being stored
+    from its scan page or for its school and city (scan_queue.storing), or
+    any listed page with a meta.json that could not be read; and its last
+    page reached the server STACK_SETTLE_MINUTES ago or more (_settled) -
+    no less than RUN_GAP_MINUTES, so a page from its scan page after that
+    begins a run of its own (_runs). Only then may its forms go up by
+    themselves (_judge_stack). A scanner session in it is paired for good
+    once nothing more can join the run itself (`beside` False, _sheets): a
+    scan another scan page is storing for its school may be beside it, but
+    never in it.
+
+    Args:
+        run: The run, in scan order.
+        now_ns: The look's clock (epoch ns).
+        unseen: A listed page of the person's could not be read, and
+            `storing` the scans still being stored (_documents_by_page).
+        beside: Whether a scan still being stored for its school and city
+            from another scan page keeps it from having finished.
+
+    Returns:
+        An empty verdict once it has finished; otherwise, pending, what it
+        waits for first - with when, for time alone (settles_at).
+    """
+    first, last = run[0], run[-1]
+    if any(page.unread for page in run):
+        return StackVerdict(_STILL_READING, True)
+    if unseen:
+        return StackVerdict(_UNSEEN, True)
+    scan_page = _scan_page(first.sender)
+    places = {(page.school, page.location) for page in run}
+    if any(
+        scan is None
+        or _scan_page(scan.sender) == scan_page
+        or (beside and (scan.school, scan.location) in places)
+        for scan in storing
+    ):
+        # From its scan page it may be more of it, and for its school and
+        # city it may be beside it; one not known may be either.
+        return StackVerdict(_STILL_STORING, True)
+    if not _settled(run, now_ns):
         return StackVerdict(_SETTLING, True, last.received_ns + _STACK_SETTLE_NS)
     return StackVerdict("")
+
+
+def _settled(run: list[PageView], now_ns: int) -> bool:
+    """Whether a run's last page reached the server STACK_SETTLE_MINUTES ago or more."""
+    return now_ns - run[-1].received_ns >= _STACK_SETTLE_NS
 
 
 def _would_hold(earlier: list[PageView], first: PageView, places: set[tuple[str, str]]) -> bool:
@@ -1773,16 +2015,17 @@ def _judge_page(doc: Document, done: list[Document], waiting: str) -> None:
     a confirmed document on the scan page (those of the last
     DONE_DOCUMENTS_HOURS) - it may be the same form scanned twice. So does a
     sheet scanned both sides whose Declaration side came first in its file
-    (_sheets): fed the other way up it is one form, but a file a side out of
-    step - its first image a back - pairs every sheet that way with the
-    sheet before's Declaration side, and only the paper shows which.
+    or scanner session (_sheets): fed the other way up it is one form, but a
+    file or session a side out of step - its first image a back - pairs
+    every sheet that way with the sheet before's Declaration side, and only
+    the paper shows which.
 
     Args:
         doc: The form, its first page first; `held` set.
         done: The person's confirmed documents.
         waiting: Why it is still waiting - for a form with no Declaration
             page, for one; for a sheet scanned both sides, for the rest of
-            its file - or "" when it is not.
+            its file or scanner session - or "" when it is not.
     """
     page = doc.pages[0]
     match = page.matched_student
@@ -1805,7 +2048,7 @@ def _judge_page(doc: Document, done: list[Document], waiting: str) -> None:
         doc.student_id_source = page.student_id_source
         where = doc.school or (f"{doc.location} schools" if doc.location else "the student list")
         said[NO_MATCH] = f"No student with ID {doc.student_id} at {where}. Check the ID against the paper."
-    if len(doc.pages) == 2 and page.both_sides and doc.pages[1].order < page.order:
+    if doc.declaration_first:
         said[DECLARATION_SIDE_FIRST] = (
             "Its Declaration side came before its Student ID side in the file - check on the paper"
             " that the two are one sheet."
@@ -2157,8 +2400,9 @@ def auto_upload_refusal(doc: Document) -> str:
          - nothing new for STACK_SETTLE_MINUTES, every page read, Student
          ID page and Declaration page by turns from first to last, all sent
          the same way, with nothing out of place or corrected by hand - of
-         files scanned both sides, nothing but such files, each pairing
-         into sheets and every sheet Student ID side first - no other scan
+         files and scanner sessions scanned both sides, nothing but such
+         files and sessions, each pairing into sheets and every sheet
+         Student ID side first - no other scan
          page sending for its school around it, and no held stack for its
          school in the HELD_STACK_HOURS before it. A form
          never goes up as its Student ID page alone. Nor anything only the
@@ -2237,9 +2481,10 @@ def _form_refusal(doc: Document) -> str:
         return "its Declaration page was attached by hand"
     if doc.between:
         return "a page came between its Student ID page and its Declaration page"
-    if first.both_sides and declaration.order < first.order:
+    if doc.declaration_first:
         # A sheet fed the other way up: its two sides are paired by their
-        # places in the file, but a person looks at it first.
+        # places in the file or scanner session, but a person looks at it
+        # first.
         return "its sheet was scanned Declaration side first"
     if declaration.received_ns - first.received_ns > _DECLARATION_WAIT_NS:
         # It had been shown with no Declaration page by then: the one that

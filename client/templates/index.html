@@ -316,9 +316,11 @@
         after it; a Declaration page the reader missed can be attached there to the
         form straight before it. A file of several pages scanned both sides is paired
         sheet by sheet - pages 1 and 2, 3 and 4, and so on - once all of it has been
-        read: each sheet's Student ID side and Declaration side are one document, the
-        Student ID side first, whichever side came first; one whose Declaration side
-        came first waits for you to check it.{% endif %} Check each
+        read, and so are the numbered images a scanner saves one a side, by their
+        numbers, once no more have come for {{ stack_settle_minutes }} minutes: each sheet's
+        Student ID side and Declaration side are one document, the Student ID side
+        first, whichever side came first; one whose Declaration side came first waits
+        for you to check it.{% endif %} Check each
         document and press <strong>Confirm and upload</strong> - until then nothing is
         saved, and nothing goes to Drive.{% if auto_upload %} The one exception, with <strong>Upload
         matched pages automatically</strong> on: a Ready document scanned for one
@@ -367,8 +369,9 @@
               Scan each form's Student ID page and, straight after it, its
               Declaration page: the two are one document. For the form printed on
               both sides of one sheet, scan both sides into one file for each stack,
-              with skip blank pages off and double-feed detection on; for the
-              two-sheet form, one side.{% endif %}
+              with skip blank pages off and double-feed detection on - numbered
+              images saved one a side are paired too, once no more have come for
+              {{ stack_settle_minutes }} minutes; for the two-sheet form, one side.{% endif %}
             </p>
           </div>
         </div>
@@ -422,6 +425,10 @@
     // Whether this server lets the page confirm documents by itself at all
     // (config.AUTO_UPLOAD). Off: the switch is hidden and never counts as on.
     const AUTO_UPLOAD = {{ auto_upload|tojson }};
+    // How long a stack has nothing new before it has finished, in minutes
+    // (config.STACK_SETTLE_MINUTES): only then are the numbered images a
+    // scanner saves one a side paired sheet by sheet.
+    const STACK_SETTLE_MINUTES = {{ stack_settle_minutes|tojson }};
     const form = document.getElementById("upload-form");
     const manualForm = document.getElementById("manual-form");
     const manualInput = document.getElementById("manual-input");
@@ -1067,14 +1074,17 @@
       }
       // Which sides: the form printed on both sides of one sheet comes in as
       // two images a sheet, which the server pairs by their places in one
-      // file - so the stack must be one file, and no blank side may be
-      // dropped. Two sheets fed as one look like one sheet, so only the
-      // scanner can catch that. The two-sheet form is two sheets of one
-      // side each.
+      // file - or, saved one image a side, by the numbers the scanner gives
+      // them, once no more have come for STACK_SETTLE_MINUTES - so the stack
+      // is best one file, and no blank side may be dropped. Two sheets fed
+      // as one look like one sheet, so only the scanner can catch that. The
+      // two-sheet form is two sheets of one side each.
       steps.push(
         "For the form printed on <strong>both sides of one sheet</strong>, scan <strong>both sides</strong> " +
           "(duplex) into one file for each stack, with <strong>skip blank pages</strong> off, so every sheet " +
-          "gives two images: its Student ID side and its Declaration side. Keep <strong>double-feed " +
+          "gives two images: its Student ID side and its Declaration side. Numbered images saved one a " +
+          `side are paired sheet by sheet too, once no more have come for ${STACK_SETTLE_MINUTES} minutes. ` +
+          "Keep <strong>double-feed " +
           "detection</strong> on: two sheets fed as one come in as one child's Student ID side and the " +
           "next child's Declaration side, and nothing else shows it. For the <strong>two-sheet " +
           "form</strong>, scan one side (<strong>simplex</strong>)."
@@ -2780,9 +2790,16 @@
         bits.push(`${plural(unsortedCount, "page")} without a ${BATCH_CODES ? "batch code" : "Student ID"}`);
       }
       if (reading) bits.push(`${plural(reading, "page")} still waiting for OCR`);
-      if (counts.waiting) {
-        bits.push(`${plural(counts.waiting, "document")} waiting for ${BATCH_CODES ? "a part" : "a Declaration page"}`);
+      // Without batch codes the two sides of one sheet wait for the rest of
+      // their scan, any other form for its Declaration page.
+      const sheets = BATCH_CODES
+        ? 0
+        : docs.filter((doc) => effectiveStatus(doc) === "waiting" && bothSides(pagesOf(doc))).length;
+      const waiting = (counts.waiting || 0) - sheets;
+      if (waiting) {
+        bits.push(`${plural(waiting, "document")} waiting for ${BATCH_CODES ? "a part" : "a Declaration page"}`);
       }
+      if (sheets) bits.push(`${plural(sheets, "document")} waiting for the rest of ${sheets === 1 ? "its" : "their"} scan`);
       if (counts.confirmed) bits.push(`${counts.confirmed} saved but not in Drive yet`);
       if (counts.uploaded) bits.push(`${counts.uploaded} uploaded`);
       setLine(
@@ -3072,9 +3089,12 @@
       head.appendChild(make("span", "ocr-doc-parts", partsText(doc)));
       let pill = DOC_STATES[status] || status;
       if (status === "uploaded" && automatic) pill = "Uploaded automatically";
-      // Without batch codes the only document that waits is a form waiting
-      // for its Declaration page: nothing of it is left to read.
-      else if (status === "waiting" && !BATCH_CODES) pill = "Waiting for its Declaration page";
+      // Without batch codes a document waits only as a form: for its
+      // Declaration page - or, the two sides of one sheet, for the rest of
+      // its scan, which may yet not pair into sheets.
+      else if (status === "waiting" && !BATCH_CODES) {
+        pill = bothSides(pages) ? "Waiting for the rest of its scan" : "Waiting for its Declaration page";
+      }
       head.appendChild(make("span", "ocr-pill is-" + (DOC_LOOKS[status] || "attention"), pill));
       el.appendChild(head);
 

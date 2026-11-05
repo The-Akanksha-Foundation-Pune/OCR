@@ -204,15 +204,20 @@ Use the Scan app and set it to save to the `OCR Scans` folder, file type PDF.
 sides (duplex) from the feeder into **one file for each stack** (PDF or TIFF),
 with **skip blank pages** (blank page removal) off, so every sheet gives two
 images - its Student ID side and its Declaration side - and keep the
-scanner's **double-feed (multifeed) detection** on. Only a file of several
-pages is paired sheet by sheet (below): one image per side, as JPEG saves it,
-is paired by scan order, so a sheet fed the other way up then pairs with its
-neighbour's side. And two sheets the feeder takes as one come in as the first
-one's Student ID side and the second one's Declaration side, which looks like
-a sheet of its own - nothing but the scanner can catch that. For the
-**two-sheet form**, scan one side (simplex). Load page 1 of each form - its
-Student ID page or side - face down in the feeder. The page picks each scan
-up within a few seconds of the scanner saving it.
+scanner's **double-feed (multifeed) detection** on. A file of several pages
+is paired sheet by sheet (below) once all of it has been read. One image per
+side, as JPEG saves it, is paired sheet by sheet too when the scanner numbers
+the images of a scan in turn (`20260101120000_0001.jpg`, `_0002.jpg` ... or
+`Scan 1.jpeg`, `Scan 2.jpeg` ...), but only once no more have come for
+`STACK_SETTLE_MINUTES` (10), so one file is still the better choice;
+images whose names carry no such number are paired by scan order, so a sheet
+fed the other way up then pairs with its neighbour's side. And two sheets the
+feeder takes as one come in as the first one's Student ID side and the second
+one's Declaration side, which looks like a sheet of its own - nothing but the
+scanner can catch that. For the **two-sheet form**, scan one side (simplex).
+Load page 1 of each form - its Student ID page or side - face down in the
+feeder. The page picks each scan up within a few seconds of the scanner
+saving it.
 
 ### 2. Add scanned files (every browser)
 
@@ -269,9 +274,31 @@ first is still one form, but it **needs your look**, and never goes up by
 itself: fed the other way up, it is right as it is - but a file whose first
 image is a back (its front never scanned) pairs every sheet that way, each
 with the sheet before's Declaration side, and only the paper shows which.
-Files of one image each are paired by scan order too, so each sheet must then
-come Student ID side first; and so is a file of the two-sheet form, its
-Declaration pages headed at the top of their own sheets, as before.
+
+A scanner that saves one image a side numbers the images of one scan in
+turn - `20260101120000_0001.jpg`, `20260101120000_0002.jpg` ..., or
+`Scan 1.jpeg`, `Scan 2.jpeg` ... The images of one run that came from one
+scan page's scan folder - or, apart from those, that were added by hand
+there - whose names are the same but for that number (the number at the
+end, after `_`, `-` or a space, or in brackets; the rest and the extension
+compared without case) are taken as one file, in the order of their numbers
+rather than of their coming: from the lowest number, the first two are one
+sheet, the next two the next, and so on, under the same rule - an even number
+of images, the numbers running on with no gap or repeat, every sheet one
+Student ID side and one Declaration side, in either order. More images can
+still join such a scan until its run has finished - nothing more from that
+scan page for `STACK_SETTLE_MINUTES` (10), nothing of it still being stored,
+every page read - so until then its forms wait, with no Confirm to press,
+saying why. Then they are Ready or need your look just as a file's would.
+Images that came in out of the order of their numbers still pair by their
+numbers, but their stack does not go up by itself. A scan whose images break
+the rule is paired by scan order, below, and its stack waits for you; a
+single numbered image, or a scan with no Declaration side (the two-sheet form
+saved as numbered images), is paired by scan order as before, and so are
+scans sent by an older page that sends no id. Other files of one image each
+are paired by scan order too, so each sheet must then come Student ID side
+first; and so is a file of the two-sheet form, its Declaration pages headed
+at the top of their own sheets, as before.
 
 Pages are only put together inside a **run**: the pages one scan page sent -
 the page makes an id for itself each time it is loaded and sends it with every
@@ -326,8 +353,10 @@ from another scan page that began later than that is not held, but for
 Statuses are **Ready** (the ID matched a student at the school and the
 Declaration page is with it), **Waiting** (no Declaration page yet: the page
 after the Student ID page is still being read, or nothing has come after it
-and it arrived less than `DECLARATION_WAIT_SECONDS` (120) ago - there is no
-Confirm until then), **Needs attention** (no Declaration page came after it,
+and it arrived less than `DECLARATION_WAIT_SECONDS` (120) ago; or a sheet
+scanned both sides whose file is still being read, or whose scan of numbered
+images may still grow - there is no Confirm until then), **Needs attention**
+(no Declaration page came after it,
 it matched nobody there, its run is held, or the same student already has a
 form confirmed in the last `DONE_DOCUMENTS_HOURS` - perhaps the same form
 scanned twice; you can still confirm it as it is, and without a Declaration
@@ -455,9 +484,11 @@ own Drive - only when all four hold:
      back, and no Declaration page attached or taken off (a correction that
      can no longer be read, from a file a power cut left empty, still counts).
      A stack with a file scanned both sides is clean only when it is nothing
-     but such files, each pairing into sheets with every sheet Student ID side
-     first: a sheet fed the other way up, a file that does not pair into
-     sheets, or other scans in among them keep it back.
+     but such files - and scans saved as numbered images one a side, which
+     count as files here - each pairing into sheets with every sheet Student ID
+     side first: a sheet fed the other way up, a file that does not pair into
+     sheets, or other scans in among them keep it back, and so do numbered
+     images that came in out of the order of their numbers.
      A stack fed Declaration page first begins or ends with a page out of
      place, so this alone keeps it back, as well as one whose first child
      returned only the Student ID page, and one with a cover sheet on top;
@@ -482,10 +513,10 @@ own Drive - only when all four hold:
    two Declaration pages swapped with each other, or two faults that cancel
    out into a stack that goes Student ID page, Declaration page, as it
    should - a form missing its Declaration page with a stray one straight
-   after it, a few seconds apart, say; or, in a file scanned both sides, two
-   sheets the feeder took as one, which come in as the first one's Student
-   ID side and the second one's Declaration side - so keep the scanner's
-   double-feed check on. Nor is what a pause cuts off: a
+   after it, a few seconds apart, say; or, in a file or numbered images
+   scanned both sides, two sheets the feeder took as one, which come in as
+   the first one's Student ID side and the second one's Declaration side -
+   so keep the scanner's double-feed check on. Nor is what a pause cuts off: a
    stack is judged as it stands once nothing has come for
    `STACK_SETTLE_MINUTES`, so when a pause longer than that - or the rest
    sent after that long from the page loaded again, or from the other
