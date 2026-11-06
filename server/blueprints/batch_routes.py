@@ -36,7 +36,7 @@ from server.blueprints.ocr_routes import (
     _is_allowed,
     _upload_filename,
 )
-from server.services import documents, ocr_worker, scan_queue
+from server.services import documents, ocr_worker, paper_forms, scan_queue
 from server.services.auth import current_user, require_login
 from server.services.debug_log import debug_log
 from server.services.extract_student_id import LookupUnavailable
@@ -45,6 +45,10 @@ batch_bp = Blueprint("batch", __name__)
 batch_bp.before_request(require_login)
 
 NOT_FOUND = "No such page."
+UNKNOWN_FORM = (
+    "This page sent a form this server does not know. Reload the page, pick the form being scanned,"
+    " and send the scan again."
+)
 # The detail of an unexpected failure (a database error names the host)
 # stays in the server log. Where the document got to shows on the next poll.
 UNEXPECTED = "Something went wrong. Wait for the list to refresh to see whether it was saved."
@@ -86,12 +90,19 @@ def scans_api() -> ResponseReturnValue:
     """Store a scan's pages in the queue for OCR. Reads nothing: answers 202 at once.
 
     The form carries the file, the school and city picked, auto_upload
-    ("1" when the page's Upload matched pages automatically switch is on)
-    and, with batch codes off, sender: the id the scan page made for itself
-    when it was loaded, with "-1" after it for a file added by hand. Each
-    page keeps both: only pages sent with the flag may have their document
-    confirmed by the page itself, and only pages from one scan page are one
-    stack (documents.auto_upload_refusal, _runs).
+    ("1" when the page's Upload matched pages automatically switch is on),
+    form - the paper form picked, "two_sheet" or "one_sheet"
+    (paper_forms) - and, with batch codes off, sender: the id the scan page
+    made for itself when it was loaded, with "-1" after it for a file added
+    by hand. Each page keeps them: only pages sent with the flag may have
+    their document confirmed by the page itself, only pages from one scan
+    page are one stack (documents.auto_upload_refusal, _runs), and the form
+    says how each page is read and paired. A scan with no form - from an
+    older page, or any other client - is the two-sheet form, as every scan
+    was before; one with a form this server does not know is refused (400)
+    with nothing stored: read as either form it would be a guess, and a
+    one-sheet stack read as two sheets has every back read as a page with
+    no Student ID.
     """
     if "file" not in request.files:
         return _error("Missing file field. Upload as multipart with key 'file'.", 400)
@@ -118,6 +129,10 @@ def scans_api() -> ResponseReturnValue:
     if sender and not scan_queue.is_sender(sender):
         debug_log(f"[API] SCANS {source_name!r}: sender {sender[:80]!r} is not a scan page's id; kept as none")
         sender = ""
+    form = paper_forms.parse(request.form.get("form"))
+    if form is None:
+        debug_log(f"[API] SCANS {source_name!r}: form {str(request.form.get('form'))[:80]!r} is not known; refused")
+        return _error(UNKNOWN_FORM, 400)
     try:
         metas = scan_queue.intake(
             uploaded.read(),
@@ -128,6 +143,7 @@ def scans_api() -> ResponseReturnValue:
             location=location,
             auto_upload=auto_upload,
             sender=sender,
+            form=form,
         )
     except ValueError as exc:
         return _error(str(exc), 400)

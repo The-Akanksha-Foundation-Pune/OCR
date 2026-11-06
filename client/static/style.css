@@ -1448,6 +1448,51 @@ button:disabled {
   color: var(--muted);
 }
 
+/* The form being scanned: each choice a line of its own, as its words are
+   long. Picked before anything can be scanned or added. */
+.form-choice {
+  margin-left: 0;
+  margin-right: 0;
+  margin-bottom: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.form-choice-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.form-option {
+  align-items: flex-start;
+  border-radius: var(--radius-sm);
+  line-height: 1.4;
+}
+
+.form-option input {
+  flex: none;
+  margin-top: 0.15rem;
+}
+
+.form-choice-needed {
+  color: var(--gold-ink);
+  font-weight: 650;
+}
+
+/* Until the form is picked nothing can be added (paintFormChoice). */
+.add-files.is-locked .drop-zone,
+.add-files.is-locked .action-btn {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.add-files.is-locked .drop-zone:hover {
+  border-color: var(--line-strong);
+  background: var(--paper);
+}
+
 /* ---- scan-from-device button ---------------------------------------- */
 
 /* The primary path once a scanner is attached, so it leads the group. */

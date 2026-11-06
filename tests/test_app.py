@@ -920,6 +920,15 @@ function loadPage(opts = {}) {
     log.push(call);
   });
   const clock = opts.clock;
+  // A browser that has had the form being scanned picked before (ocr.form):
+  // the two-sheet form, unless opts.form names another - or none, null. One
+  // whose storage refuses everything keeps none.
+  const localStorage = makeStorage(opts.local);
+  if (opts.form !== null) {
+    try {
+      if (!localStorage.getItem("ocr.form")) localStorage.setItem("ocr.form", opts.form || "two_sheet");
+    } catch (_) { /* nothing kept */ }
+  }
   const ctx = {
     document, fetch, console,
     setTimeout: clock ? clock.setTimeout : setTimeout,
@@ -931,7 +940,7 @@ function loadPage(opts = {}) {
     TypeError, Boolean, RegExp, Uint8Array, Map, AbortController, AbortSignal,
     // The browser's own random numbers, for the page's id (SENDER).
     crypto: globalThis.crypto,
-    localStorage: makeStorage(opts.local), sessionStorage: makeStorage(opts.session),
+    localStorage, sessionStorage: makeStorage(opts.session),
     navigator: opts.navigator || { userAgent: "Mozilla/5.0 (Macintosh)", platform: "MacIntel", maxTouchPoints: 0 },
     FormData: class { constructor() { this.parts = []; } append(k, v, n) { this.parts.push([k, v, n]); } },
     Blob: class { constructor(p, o) { this.p = p; this.o = o; } },
@@ -946,7 +955,14 @@ function loadPage(opts = {}) {
   ctx.window = Object.assign(ctx, { addEventListener() {}, removeEventListener() {} });
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), ctx);
-  return { byId, calls, log, schoolSelect, radios, document };
+  return { byId, calls, log, schoolSelect, radios, document, storage: localStorage };
+}
+
+// The person picks the form being scanned: "two_sheet" or "one_sheet".
+function pickForm(page, form) {
+  const radio = page.byId[form === "one_sheet" ? "form-one-sheet" : "form-two-sheet"];
+  radio.checked = true;
+  radio.fire("change");
 }
 
 // Answer the first queued request that matches, waiting for it if need be.
@@ -990,19 +1006,19 @@ async function answerSchools(page) {
     { school: "School A", location: "Pune" }, { school: "School B", location: "Pune" },
   ] });
 }
-// The page with School A of Pune remembered, in a browser that cannot
-// watch a folder (Firefox or Safari).
+// The page with School A of Pune remembered - and the two-sheet form, or
+// opts.form - in a browser that cannot watch a folder (Firefox or Safari).
 async function openPage(opts = {}) {
-  const page = loadPage({ clock: opts.clock, local: { "ocr.school": "School A", "ocr.location": "Pune" } });
+  const page = loadPage({ clock: opts.clock, form: opts.form, local: { "ocr.school": "School A", "ocr.location": "Pune" } });
   await answerSchools(page);
   await answer(page.calls, "/api/inbox/status", { configured: false });
   return page;
 }
 // The same page in Chrome or Edge, which can: Connect scan folder hands it
 // `folder`.
-async function openScannerPage({ clock, idb, folder }) {
+async function openScannerPage({ clock, idb, folder, form }) {
   const page = loadPage({
-    clock, indexedDB: idb,
+    clock, indexedDB: idb, form,
     local: { "ocr.school": "School A", "ocr.location": "Pune" },
     showDirectoryPicker: async (options) => { page.pickerOptions = options; return folder; },
   });
@@ -1224,7 +1240,9 @@ def test_page_typed_id_is_looked_up_before_anything_is_saved(client: FlaskClient
       return { form: sentForm(sent), looked, writesBeforeConfirm, who, prefilled, body: JSON.parse(c.opts.body) };
     """)
 
-    assert out["form"] == {"file": "form.jpg", "school": "School A", "location": "Pune", "auto_upload": "1"}
+    assert out["form"] == {
+        "file": "form.jpg", "school": "School A", "location": "Pune", "auto_upload": "1", "form": "two_sheet",
+    }
     assert out["looked"] == [
         ["/api/pages/p1/student-id", {"student_id": "MOHSHA011021"}],
         ["/api/pages/p2/student-id", {"student_id": "MOHSHA011021"}],
@@ -1322,9 +1340,9 @@ def test_page_each_added_file_keeps_the_school_it_was_added_for(client: FlaskCli
     """)
 
     assert out["forms"] == [
-        {"file": "a1.jpg", "school": "School A", "location": "Pune", "auto_upload": "1"},
-        {"file": "a2.jpg", "school": "School A", "location": "Pune", "auto_upload": "1"},
-        {"file": "b1.jpg", "school": "School B", "location": "Pune", "auto_upload": "1"},
+        {"file": "a1.jpg", "school": "School A", "location": "Pune", "auto_upload": "1", "form": "two_sheet"},
+        {"file": "a2.jpg", "school": "School A", "location": "Pune", "auto_upload": "1", "form": "two_sheet"},
+        {"file": "b1.jpg", "school": "School B", "location": "Pune", "auto_upload": "1", "form": "two_sheet"},
     ]
     assert out["saves"] == 0
 
@@ -1358,8 +1376,8 @@ def test_page_scan_folder_keeps_each_scan_to_the_school_it_was_seen_under(
     """)
 
     assert out["sends"] == [
-        {"file": "Scan 001.jpg", "school": "School A", "location": "Pune", "auto_upload": "1"},
-        {"file": "Scan 002.jpg", "school": "School B", "location": "Pune", "auto_upload": "1"},
+        {"file": "Scan 001.jpg", "school": "School A", "location": "Pune", "auto_upload": "1", "form": "two_sheet"},
+        {"file": "Scan 002.jpg", "school": "School B", "location": "Pune", "auto_upload": "1", "form": "two_sheet"},
     ]
     assert out["held"] == ""
     assert "for School B" in out["state"]
@@ -2170,7 +2188,7 @@ def test_page_drop_zone_and_choose_files_take_the_same_way_in(client: FlaskClien
         (
             {"userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", "platform": "MacIntel", "maxTouchPoints": 0},
             ["Image Scanner Driver for macOS (ICA)", "Image Capture", "Use Document Feeder",
-             "100 dpi", "Combine into single document", "Scan To", "OCR Scans", "face down"],
+             "100 dpi", "JPEG or TIFF", "Scan To", "OCR Scans", "face down"],
         ),
         (
             {"userAgent": "Mozilla/5.0 (X11; Linux x86_64)", "platform": "Linux x86_64", "maxTouchPoints": 0},
@@ -2185,12 +2203,16 @@ def test_page_drop_zone_and_choose_files_take_the_same_way_in(client: FlaskClien
 def test_page_scanner_setup_follows_the_visitors_computer(
     client: FlaskClient, tmp_path: Path, navigator: dict[str, Any], expected: list[str]
 ) -> None:
-    """The one-time setup is for the computer the scanner is plugged into."""
+    """The one-time setup is for the computer the scanner is plugged into - here for the two-sheet form, one side of each sheet.
+
+    The one-sheet form's: tests/test_both_sides.py.
+    """
     out = _run_page(client, tmp_path, rf"""
       const page = loadPage({{
         navigator: {json.dumps(navigator)},
         showDirectoryPicker: async () => makeFolder(),
         indexedDB: makeIndexedDB(),
+        form: "two_sheet",
       }});
       return page.byId["scan-folder-steps"].innerHTML;
     """)

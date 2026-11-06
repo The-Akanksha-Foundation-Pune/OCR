@@ -13,8 +13,10 @@ Supports English, Hindi, and Marathi form labels. Only the Student ID value is r
 ## How it works
 
 1. A form arrives - from the watched scan folder or scanned files added on the
-   page - as a JPG / PNG / PDF / TIFF. The server only stores and queues it
-   (one queued page per page of the file) and answers at once.
+   page - as a JPG / PNG / PDF / TIFF, sent as the form picked on the page:
+   **two sheets**, or **one sheet printed on both sides** (see
+   [The form being scanned](#the-form-being-scanned)). The server only stores
+   and queues it (one queued page per page of the file) and answers at once.
 2. In the background the OCR worker reads each queued page: it turns it the
    right way up, reads the handwritten **batch code** (`B1-12`) in its top-right
    corner when batch codes are on (they are off by default - see
@@ -95,7 +97,11 @@ or with an unverified Google email, gets bounced back to `/login` with an error.
 
 1. Sign in and open the Scanner page.
 2. Pick the school whose forms you are scanning - it keeps a misread ID from
-   matching a child at another school.
+   matching a child at another school - and the **form being scanned**: two
+   sheets (a Student ID page and a separate Declaration page), or one sheet
+   printed on both sides (Student ID on the front, Declaration on the back).
+   Nothing can be scanned or added until the form is picked; the computer
+   remembers it, and it can be changed before the next stack.
 3. Bring the forms in (see below): connect the scan folder once and press the
    scanner's Scan button, add scanned files by hand, or press **Start
    scanning** on the Drive inbox panel.
@@ -200,8 +206,9 @@ Use Document Scanner (simple-scan), which drives the SP-1130N through SANE's
 
 Use the Scan app and set it to save to the `OCR Scans` folder, file type PDF.
 
-**Every OS:** for the form printed on **both sides of one sheet**, scan both
-sides (duplex) from the feeder into **one file for each stack** (PDF or TIFF),
+The page shows these steps for the form picked on it. **Every OS:** for the
+form printed on **both sides of one sheet**, scan both sides (duplex) from
+the feeder into **one file for each stack** (PDF or TIFF),
 with **skip blank pages** (blank page removal) off, so every sheet gives two
 images - its Student ID side and its Declaration side - and keep the
 scanner's **double-feed (multifeed) detection** on. A file of several pages
@@ -214,10 +221,10 @@ images whose names carry no such number are paired by scan order, so a sheet
 fed the other way up then pairs with its neighbour's side. And two sheets the
 feeder takes as one come in as the first one's Student ID side and the second
 one's Declaration side, which looks like a sheet of its own - nothing but the
-scanner can catch that. For the **two-sheet form**, scan one side (simplex).
-Load page 1 of each form - its Student ID page or side - face down in the
-feeder. The page picks each scan up within a few seconds of the scanner
-saving it.
+scanner can catch that. For the **two-sheet form**, scan one side (simplex),
+as JPEG or PDF. Load page 1 of each form - its Student ID page or side - face
+down in the feeder. The page picks each scan up within a few seconds of the
+scanner saving it.
 
 ### 2. Add scanned files (every browser)
 
@@ -233,6 +240,55 @@ See [Scanning through the Drive inbox](#scanning-through-the-drive-inbox): the
 scanner's software saves into a Google Drive folder and the server reads the
 pages from there.
 
+## The form being scanned
+
+Two consent forms are in use: the **two-sheet form**, which almost every school
+uses - a Student ID page, then a separate Declaration page whose "घोषणा"
+heading is at the top left of its own sheet - and the **one-sheet form**,
+printed on both sides of one sheet, its Student ID side on the front and its
+Declaration side on the back, the heading about half way down the left margin.
+Each is read by its own rules, so the scan page asks which one is being scanned
+**before anything can be sent**: until a form is picked, beside the school, the
+scan folder, the drop zone and Choose files are locked, with one line saying
+so. The pick is remembered on that computer (in the browser's storage - a
+browser that keeps nothing, such as a private window, asks again on each
+visit), stays shown at the top, and can be changed for the next stack: a scan
+is sent as the form picked when it came in - as it is for the school - so a
+scan the folder had already shown goes as the form before the change.
+
+Every scan from the page carries the form (`form`: `two_sheet` or
+`one_sheet`) and each of its pages keeps it (`meta.json`). A scan with a form
+the server does not know is refused (`400`, nothing stored): read as either
+form it would be a guess, and a one-sheet stack read as two sheets has every
+back read as a page with no Student ID. **Anything that comes with no form is
+the two-sheet form**, read exactly as before the one-sheet form was known:
+pages queued before the choice existed, scans from an older page, the
+`/api/extract` routes - and the **Drive inbox, which reads every page as the
+two-sheet form**.
+
+- **Two sheets:** a Declaration page is known by its heading at the top left
+  alone (and, for a page with no ruled layout, the text in its top strip),
+  never searched for down the margin - so never taken for the back of a
+  one-sheet form, however low in the frame it was scanned or photographed; an
+  upside-down Student ID page is turned upright whenever its ruled layout fits
+  better turned round, loosely or not; and the pages pair by scan order, never
+  by their places in a file or as a scanner's numbered images.
+- **One sheet:** everything below about the form printed on both sides of one
+  sheet - the heading looked for down the whole left margin, turned round too;
+  a page turned round by its layout only on a close fit; each file's, or
+  numbered scan's, sheets paired by place.
+- **Both:** a Student ID page whose box is empty is set aside unread only where
+  its ruled layout pins the box closely (`LAYOUT_TRUST_ERROR`); batch codes and
+  automatic upload work the same way.
+
+A run that mixes the two forms - a one-sheet stack, then a two-sheet one from
+the same computer straight after - is read and paired page by page, each by
+its own form. A one-sheet file, or numbered scan, paired by place in among
+other scans waits for a person (below), and then none of the run's forms
+goes up by itself; a one-sheet scan of a single image that is in no numbered
+scan pairs by scan order like any other file. With batch codes on,
+pages still group by their codes, and each is still read by its own form.
+
 ## Batch codes and documents
 
 **Batch codes are off by default.** Without them the code corner is not read,
@@ -243,8 +299,9 @@ Student ID. The two are one document: one Confirm, one PDF with the Student ID
 page first, named `<StudentName>_<StudentID>.pdf` (same folders as below).
 
 The reader knows a Declaration page by its printed "घोषणा" heading: at the top
-left of its own sheet (the two-sheet form), or anywhere down the left margin -
-part way down the back of the form printed on **both sides of one sheet**.
+left of its own sheet (the two-sheet form), or - on a page sent as the
+one-sheet form - anywhere down the left margin, part way down the back of the
+form printed on **both sides of one sheet**.
 Down the margin the page and the heading are matched a little blurred and at a
 few sizes around the heading picture's own, and a page matching at least
 `DECLARATION_SIDE_MATCH_MIN` (0.84) is a Declaration side: on real scans of it -
@@ -260,9 +317,10 @@ check is made before that, as it always was: its Declaration pages can fit a
 ladder by accident. On real scans of the one-sheet form it took no page at all.)
 
 The form printed on both sides of one sheet, scanned both sides into one
-multi-page file (TIFF or PDF), comes in as two pages a sheet, and the file is
-paired **sheet by sheet**, by place: pages 1 and 2 are one form, 3 and 4 the
-next, and so on - the Student ID side first in the document and the PDF,
+multi-page file (TIFF or PDF) and sent as that form, comes in as two pages a
+sheet, and the file is paired **sheet by sheet**, by place: pages 1 and 2 are
+one form, 3 and 4 the next, and so on - the Student ID side first in the
+document and the PDF,
 whichever side came first. That holds only while the file has an even number
 of pages and every sheet is one Student ID side and one Declaration side the
 reader recognised; a file that breaks it anywhere - an odd page, a blank side,
@@ -277,9 +335,9 @@ with the sheet before's Declaration side, and only the paper shows which.
 
 A scanner that saves one image a side numbers the images of one scan in
 turn - `20260101120000_0001.jpg`, `20260101120000_0002.jpg` ..., or
-`Scan 1.jpeg`, `Scan 2.jpeg` ... The images of one run that came from one
-scan page's scan folder - or, apart from those, that were added by hand
-there - whose names are the same but for that number (the number at the
+`Scan 1.jpeg`, `Scan 2.jpeg` ... The one-sheet form's images of one run that
+came from one scan page's scan folder - or, apart from those, that were added
+by hand there - whose names are the same but for that number (the number at the
 end, after `_`, `-` or a space, or in brackets; the rest and the extension
 compared without case) are taken as one file, in the order of their numbers
 rather than of their coming: from the lowest number, the first two are one
@@ -595,7 +653,10 @@ Desktop syncs: each person keeps a folder called **OCR Inbox**
 service account, and points the scanner's software at it. On the page, pick the
 school and press **Start scanning**; the server reads every page that reaches
 Drive against that school, and renames each file to say what became of it
-(`[saved] Name_ID.jpg`, `[not found] ID.jpg`).
+(`[saved] Name_ID.jpg`, `[not found] ID.jpg`). The inbox reads **every page as
+the two-sheet form**, whatever form is picked on the page (which says so with
+the one-sheet form picked): scan the one-sheet form into the scan folder, or
+add its files on the page.
 
 **Stop** decides by when each page reached Drive:
 
@@ -636,7 +697,7 @@ comes from another site. POSTs with a body send it as `application/json`.
 
 | Route | What it does |
 | --- | --- |
-| `POST /api/scans` (multipart `file`, `school`, `location`, `auto_upload`, `sender`) | Store and queue a scan, one page per page of the file; each page keeps `auto_upload` (`1` when Upload matched pages automatically is on, off when missing) and `sender`, the scan page's id for itself (32 hex digits, with `-1` after them for a file added by hand; anything else is kept as none). `202 {pages: [{page_id, source_page}]}`. No OCR. |
+| `POST /api/scans` (multipart `file`, `school`, `location`, `auto_upload`, `sender`, `form`) | Store and queue a scan, one page per page of the file; each page keeps `auto_upload` (`1` when Upload matched pages automatically is on, off when missing), `sender`, the scan page's id for itself (32 hex digits, with `-1` after them for a file added by hand; anything else is kept as none), and `form`, the paper form picked (`two_sheet` or `one_sheet`; missing or empty is `two_sheet`; anything else is refused with `400` and nothing stored). `202 {pages: [{page_id, source_page}]}`. No OCR. |
 | `GET /api/batches` | Your documents by batch (newest first) - with batch codes off, one group with no batch, newest scan first - `unsorted` pages (with batch codes off, each with the `declaration_pages` of its form and, for a page that may be the Declaration page the reader missed, `attach_to {page_id, student_name}`), every page with its status (`pages`) and the `queue` counts. |
 | `GET /api/documents/<key>` | One document (`B1-12`, or with batch codes off `P` and its Student ID page's id; `~<id>` added once confirmed) with its parts. `auto_upload: true` on an open one the page may confirm by itself - with batch codes off, `auto_upload_pending: true` on one it may once its stack has finished, which the page keeps looking at, `auto_upload_at` (India time) when it goes up if nothing else comes - given only while time is all it waits for - and `auto_upload_refusal`, why it is not going up now; `confirmed_automatically` on one it did. |
 | `GET /api/pages/<page_id>/image?size=thumb\|full` | The page's scanned image, to its owner only. |
@@ -716,6 +777,7 @@ server/                     # backend — Flask app package (never touches a sca
     history_store.py
     batch_store.py               # Drive inbox batches + watcher heartbeat
     scan_queue.py                # the scan queue on disk (data/queue)
+    paper_forms.py               # the two paper forms, and which rules each is read by
     ocr_worker.py                # reads queued pages in the background
     batch_code.py                # reads and parses the handwritten B1-12 code
     documents.py                 # groups pages into documents; confirm + upload

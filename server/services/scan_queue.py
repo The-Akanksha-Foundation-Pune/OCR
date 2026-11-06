@@ -69,6 +69,7 @@ from server.config import (
 )
 from server.services.clock import now_ist
 from server.services.debug_log import debug_log
+from server.services.paper_forms import TWO_SHEET
 from server.services.preprocess import (
     count_pages_from_bytes,
     load_page_grey,
@@ -146,6 +147,11 @@ class PageMeta:
             scan page are one stack (documents._runs), and only a form sent
             the one way may go up by itself. "" for a page sent by an older
             page or any other client.
+        form: Which paper form the scan page said the page is
+            (paper_forms): TWO_SHEET or ONE_SHEET, and so how it is read and
+            paired. TWO_SHEET - as every page was read before the choice -
+            for a page queued before it existed, whose meta.json has no such
+            key, and for one sent with none.
     """
 
     page_id: str
@@ -165,6 +171,7 @@ class PageMeta:
     updated_at: str = ""
     auto_upload: bool = False
     sender: str = ""
+    form: str = TWO_SHEET
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PageMeta:
@@ -418,6 +425,7 @@ def intake(
     location: str = "",
     auto_upload: bool = False,
     sender: str = "",
+    form: str = TWO_SHEET,
 ) -> list[PageMeta]:
     """Store an upload in the queue, one queued page per page of the file.
 
@@ -439,6 +447,7 @@ def intake(
         auto_upload: Whether the page's Upload matched pages automatically
             switch was on when it sent the file.
         sender: The scan page's id (is_sender), or "" for none.
+        form: The paper form picked on the page (paper_forms).
 
     Returns:
         The queued pages, in page order.
@@ -494,6 +503,7 @@ def intake(
                     updated_at=created,
                     auto_upload=auto_upload,
                     sender=sender,
+                    form=form,
                 )
                 write_json_atomic(folder / "meta.json", asdict(meta))
                 metas.append(meta)
@@ -514,7 +524,7 @@ def intake(
             shutil.rmtree(staging, ignore_errors=True)
     debug_log(
         f"[QUEUE] queued {len(metas)} page(s) from {source_name!r} for {owner!r} "
-        f"school={school!r} location={location!r} auto_upload={auto_upload} sender={sender!r}"
+        f"school={school!r} location={location!r} auto_upload={auto_upload} sender={sender!r} form={form}"
     )
     return metas
 

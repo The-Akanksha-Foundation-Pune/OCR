@@ -39,7 +39,7 @@
       <p class="brand">Akanksha Form OCR</p>
       <h1>Extract Student ID</h1>
       <p class="lede">
-        Pick the location and school, then press the Scan button on the
+        Pick the location, school and form, then press the Scan button on the
         scanner - this page sends each page from your <strong>scan
         folder</strong> as the scanner saves it, or you can add scanned files
         by hand. The pages are read in the background and {% if batch_codes %}gathered into
@@ -87,6 +87,30 @@
             match a child at another school.
           </p>
 
+          <!-- Which paper form is being scanned. Asked before anything can be
+               scanned or added, remembered per browser like the school, and
+               sent with every scan: the server reads and pairs each page by
+               the form it was sent as (paper_forms). -->
+          <fieldset class="form-choice school-label-spaced" id="form-choice">
+            <legend class="school-label">Form being scanned</legend>
+            <div class="form-choice-options">
+              <label class="location-option form-option" for="form-two-sheet">
+                <input type="radio" name="paper-form" id="form-two-sheet" value="two_sheet" />
+                <span>Two sheets: a Student ID page and a separate Declaration page</span>
+              </label>
+              <label class="location-option form-option" for="form-one-sheet">
+                <input type="radio" name="paper-form" id="form-one-sheet" value="one_sheet" />
+                <span>One sheet printed on both sides: Student ID on the front, Declaration on the back</span>
+              </label>
+            </div>
+          </fieldset>
+          <p class="school-hint form-choice-needed" id="form-choice-needed" role="status">
+            Pick the form being scanned first - nothing can be scanned or added until you do.
+          </p>
+          <p class="school-hint" id="form-choice-hint" hidden>
+            Every scan from now on is read as this form. Change it before a stack of the other form.
+          </p>
+
           <!-- Remembered per browser and sent with every scan: only pages
                sent with it on can go up by themselves. -->
           <div class="school-label-spaced"{% if not auto_upload %} hidden{% endif %}>
@@ -111,10 +135,10 @@
             by hand in among what the scan folder sent, another computer or tab
             scanning for the same school at the same time, a stack for a school in the
             {{ held_stack_hours }} hours after one of its stacks had a page out of place,
-            {% endif %}or anything that needs checking still waits for you.{% if not batch_codes %}
+            {% endif %}or anything that needs checking still waits for you.{% if not batch_codes %}<span id="auto-upload-sides" hidden>
             So does every form of a stack with a sheet scanned Declaration side first, a
             file scanned both sides that does not pair into sheets, or such a file in
-            among other scans.{% endif %}
+            among other scans.</span>{% endif %}
           </p>
           <p class="school-hint" id="auto-upload-stopped" role="status" hidden></p>
         </div>
@@ -170,6 +194,10 @@
           </div>
           <p class="inbox-progress" id="inbox-progress" hidden></p>
           <p class="inbox-hint" id="inbox-hint"></p>
+          <p class="inbox-hint" id="inbox-form-note" hidden>
+            The Drive inbox reads every page as the two-sheet form: scan the one-sheet
+            form into the scan folder, or add its files below.
+          </p>
           <div class="inbox-actions">
             <button type="button" class="action-btn scan-btn inbox-start" id="inbox-start" disabled>
               <span class="action-icon" aria-hidden="true">
@@ -314,13 +342,13 @@
         right before it waits there on its own, and the forms scanned with it wait for
         you to check them - as they do after a Student ID page with no Declaration page
         after it; a Declaration page the reader missed can be attached there to the
-        form straight before it. A file of several pages scanned both sides is paired
+        form straight before it.<span id="ocr-note-sides" hidden> A file of several pages scanned both sides is paired
         sheet by sheet - pages 1 and 2, 3 and 4, and so on - once all of it has been
         read, and so are the numbered images a scanner saves one a side, by their
         numbers, once no more have come for {{ stack_settle_minutes }} minutes: each sheet's
         Student ID side and Declaration side are one document, the Student ID side
         first, whichever side came first; one whose Declaration side came first waits
-        for you to check it.{% endif %} Check each
+        for you to check it.</span>{% endif %} Check each
         document and press <strong>Confirm and upload</strong> - until then nothing is
         saved, and nothing goes to Drive.{% if auto_upload %} The one exception, with <strong>Upload
         matched pages automatically</strong> on: a Ready document scanned for one
@@ -351,10 +379,11 @@
         <div class="step-card">
           <span class="step-num" aria-hidden="true">1</span>
           <div>
-            <p class="step-title">Pick the location and school</p>
+            <p class="step-title">Pick the location, school and form</p>
             <p class="step-text">
               The lookup is limited to that school, so a misread ID cannot match
-              a child somewhere else.
+              a child somewhere else. The form - two sheets, or one sheet printed
+              on both sides - says how each page is read.
             </p>
           </div>
         </div>
@@ -365,13 +394,15 @@
             <p class="step-text">
               {% if batch_codes %}Write the batch code - B1-1, B1-2 and so on - in the top-right
               corner of every page, the same code on each page of one form.
-              {% endif %}Scan into the connected scan folder, or add the files by hand.{% if not batch_codes %}
+              {% endif %}Scan into the connected scan folder, or add the files by hand.{% if not batch_codes %}<span id="how-sides-two" hidden>
               Scan each form's Student ID page and, straight after it, its
-              Declaration page: the two are one document. For the form printed on
-              both sides of one sheet, scan both sides into one file for each stack,
-              with skip blank pages off and double-feed detection on - numbered
-              images saved one a side are paired too, once no more have come for
-              {{ stack_settle_minutes }} minutes; for the two-sheet form, one side.{% endif %}
+              Declaration page: the two are one document. Scan one side of each
+              sheet.</span><span id="how-sides-one" hidden>
+              Scan both sides of each sheet into one file for each stack, with skip
+              blank pages off and double-feed detection on: its Student ID side and
+              its Declaration side are one document. Numbered images saved one a
+              side are paired too, once no more have come for
+              {{ stack_settle_minutes }} minutes.</span>{% endif %}
             </p>
           </div>
         </div>
@@ -778,6 +809,9 @@
       body.append("school", (scope && scope.school) || "");
       body.append("location", (scope && scope.location) || "");
       body.append("auto_upload", autoUploadOn() ? "1" : "0");
+      // The paper form picked when the file came in (pickerScope): the
+      // server reads and pairs its pages by it.
+      body.append("form", (scope && scope.form) || "");
       if (sender) body.append("sender", sender);
       let response;
       try {
@@ -820,8 +854,9 @@
       return picked ? picked.value : "";
     }
 
+    // The school, city and form a scan is sent for, fixed when it comes in.
     function pickerScope() {
-      return { school: selectedSchool(), location: selectedLocation() };
+      return { school: selectedSchool(), location: selectedLocation(), form: paperForm };
     }
 
     function remember(key, value) {
@@ -839,6 +874,78 @@
         return "";
       }
     }
+
+    // ---- the form being scanned ---------------------------------------------
+    // Two paper forms: two sheets - a Student ID page, then a Declaration page
+    // of its own - or one sheet printed on both sides, its Student ID side on
+    // the front and its Declaration side on the back. The server reads and
+    // pairs each page by the form it was sent as (paper_forms), so nothing is
+    // scanned or added until one is picked: the scan folder, the drop zone and
+    // Choose files stay locked until then. Remembered per browser like the
+    // school - a school scans the same form every time - and, like the school,
+    // fixed for each scan when it comes in (pickerScope): a change applies to
+    // the scans that come in after it. A browser that keeps nothing asks again
+    // on every visit. A page that comes with no form - from the Drive inbox,
+    // or an older page - is read as two sheets.
+    const FORM_KEY = "ocr.form";
+    const FORMS = ["two_sheet", "one_sheet"];
+    const FORM_RADIOS = {
+      two_sheet: document.getElementById("form-two-sheet"),
+      one_sheet: document.getElementById("form-one-sheet"),
+    };
+    // The help that is about one form only, shown with that form alone.
+    const FORM_HELP = {
+      two_sheet: ["how-sides-two"],
+      one_sheet: ["auto-upload-sides", "ocr-note-sides", "how-sides-one", "inbox-form-note"],
+    };
+    const formNeeded = document.getElementById("form-choice-needed");
+    const formHint = document.getElementById("form-choice-hint");
+    const addFiles = document.getElementById("upload-tiles");
+    // "" until one is picked on this computer.
+    let paperForm = keptForm();
+
+    function keptForm() {
+      const kept = recall(FORM_KEY);
+      return FORMS.includes(kept) ? kept : "";
+    }
+
+    // The choice as it stands, and all it unlocks or changes: the scan
+    // folder, the drop zone and Choose files, the setup steps and the help.
+    function paintFormChoice() {
+      const picked = Boolean(paperForm);
+      FORMS.forEach((value) => {
+        if (FORM_RADIOS[value]) FORM_RADIOS[value].checked = value === paperForm;
+      });
+      formNeeded.hidden = picked;
+      formHint.hidden = !picked;
+      Object.keys(FORM_HELP).forEach((value) => {
+        FORM_HELP[value].forEach((id) => {
+          // Some are only on the page with batch codes off, or automatic upload on.
+          const help = document.getElementById(id);
+          if (help) help.hidden = value !== paperForm;
+        });
+      });
+      fileInput.disabled = !picked;
+      addFiles.classList.toggle("is-locked", !picked);
+      dropZone.setAttribute("aria-disabled", picked ? "false" : "true");
+      if (platform !== "handheld") scanFolderSteps.innerHTML = scanSetupHtml();
+      paintScanFolder();
+    }
+
+    FORMS.forEach((value) => {
+      const radio = FORM_RADIOS[value];
+      if (!radio) return;
+      radio.addEventListener("change", () => {
+        if (!radio.checked || value === paperForm) return;
+        paperForm = value;
+        remember(FORM_KEY, value);
+        paintFormChoice();
+        // What the scan folder sends from now on goes as this form, as for a
+        // new school - and a folder that waited for a form is read now.
+        scanFolderPickerChanged();
+        resumeWatching();
+      });
+    });
 
     // Upload matched pages automatically, beside the school picker: on unless
     // this browser was told otherwise, and remembered like the school. Every
@@ -1016,7 +1123,15 @@
     // One-time setup, for the person at the scanner: its own software,
     // saving into the folder this page reads. Written for the Fujitsu/Ricoh
     // SP-1130N, but true of any scanner whose software saves into a folder.
+    // How it scans follows the form being scanned (paperForm): the two-sheet
+    // form one side of each sheet, a file a scan or an image a page; the
+    // one-sheet form both sides, best one file for each stack. Until a form
+    // is picked there is nothing to set up for.
     function scanSetupHtml() {
+      if (!paperForm) {
+        return '<p class="scanner-note">Pick the form being scanned, above: the steps depend on it.</p>';
+      }
+      const both = paperForm === "one_sheet";
       const downloads =
         `Ricoh's <a href="${SP1130N_DOWNLOADS}" target="_blank" rel="noopener">` +
         "SP-1130N download page</a>";
@@ -1026,11 +1141,16 @@
         steps = [
           `From ${downloads}, install the free <strong>PaperStream IP (TWAIN)</strong> ` +
             "driver and <strong>PaperStream Capture</strong>.",
-          "In PaperStream Capture, create a profile: <strong>Output folder</strong> " +
-            "<code>Documents\\OCR Scans</code>, file type <strong>PDF</strong> (or TIFF) with all " +
-            "of a scan's pages in one file, <strong>100 dpi</strong>, <strong>Black &amp; White</strong>, " +
-            "paper from the <strong>document feeder</strong>, <strong>multifeed detection</strong> on, " +
-            "and the sides your form needs (below).",
+          both
+            ? "In PaperStream Capture, create a profile: <strong>Output folder</strong> " +
+              "<code>Documents\\OCR Scans</code>, file type <strong>PDF</strong> (or TIFF) with all " +
+              "of a scan's pages in one file, <strong>100 dpi</strong>, <strong>Black &amp; White</strong>, " +
+              "paper from the <strong>document feeder</strong>, <strong>multifeed detection</strong> on, " +
+              "and the sides your form needs (below)."
+            : "In PaperStream Capture, create a profile: <strong>Output folder</strong> " +
+              "<code>Documents\\OCR Scans</code>, file type <strong>JPEG</strong> (or PDF), " +
+              "<strong>100 dpi</strong>, <strong>Black &amp; White</strong>, one side " +
+              "(<strong>simplex</strong>), paper from the <strong>document feeder</strong>.",
           "Link that profile to the scanner's Scan button with " +
             "<strong>Assign to scanner button</strong> in PaperStream Capture.",
         ];
@@ -1042,7 +1162,9 @@
           "Open <strong>Image Capture</strong> (in Applications) and choose " +
             "<strong>SP-1130N</strong>. Tick <strong>Use Document Feeder</strong>, then set " +
             "<strong>Kind</strong> Black &amp; White, <strong>Resolution</strong> 100 dpi, " +
-            "<strong>Format</strong> PDF with <strong>Combine into single document</strong> ticked, " +
+            (both
+              ? "<strong>Format</strong> PDF with <strong>Combine into single document</strong> ticked, "
+              : "<strong>Format</strong> JPEG or TIFF, ") +
             "and <strong>Scan To</strong> the " +
             "<code>Documents/OCR Scans</code> folder (<em>Other...</em> makes one; " +
             "<strong>Show Details</strong> shows these settings if they are hidden).",
@@ -1053,7 +1175,7 @@
           "Install <strong>Document Scanner</strong> (simple-scan) and SANE - the " +
             "SP-1130N works through SANE's <code>fujitsu</code> backend.",
           "In Document Scanner, scan from the document feeder and save into the " +
-            "<code>~/OCR Scans</code> folder, as one PDF for each scan.",
+            `<code>~/OCR Scans</code> folder, as ${both ? "one PDF for each scan" : "JPEG or PDF"}.`,
         ];
         start = "press <strong>Scan</strong> in Document Scanner";
       } else if (platform === "chromeos") {
@@ -1061,38 +1183,45 @@
           "Open the <strong>Scan</strong> app from the Launcher and choose the SP-1130N, " +
             "scanning from the document feeder.",
           "Set <strong>Save to</strong> the <code>My files/OCR Scans</code> folder, and " +
-            "the file type to PDF.",
+            `the file type to ${both ? "PDF" : "JPG or PDF"}.`,
         ];
         start = "press <strong>Scan</strong> in the Scan app";
       } else {
         steps = [
           `Install the scanner's own software - for an SP-1130N, from ${downloads}.`,
           "Make it save each scan into one folder, such as <code>OCR Scans</code>, as " +
-            "one PDF or TIFF file.",
+            `${both ? "one PDF or TIFF file" : "JPEG, PNG, PDF or TIFF"}.`,
         ];
         start = "start the scan from the scanner's software";
       }
-      // Which sides: the form printed on both sides of one sheet comes in as
-      // two images a sheet, which the server pairs by their places in one
-      // file - or, saved one image a side, by the numbers the scanner gives
-      // them, once no more have come for STACK_SETTLE_MINUTES - so the stack
-      // is best one file, and no blank side may be dropped. Two sheets fed
-      // as one look like one sheet, so only the scanner can catch that. The
-      // two-sheet form is two sheets of one side each.
-      steps.push(
-        "For the form printed on <strong>both sides of one sheet</strong>, scan <strong>both sides</strong> " +
-          "(duplex) into one file for each stack, with <strong>skip blank pages</strong> off, so every sheet " +
-          "gives two images: its Student ID side and its Declaration side. Numbered images saved one a " +
-          `side are paired sheet by sheet too, once no more have come for ${STACK_SETTLE_MINUTES} minutes. ` +
-          "Keep <strong>double-feed " +
-          "detection</strong> on: two sheets fed as one come in as one child's Student ID side and the " +
-          "next child's Declaration side, and nothing else shows it. For the <strong>two-sheet " +
-          "form</strong>, scan one side (<strong>simplex</strong>)."
-      );
-      const load = BATCH_CODES
-        ? "Write each form's batch code (B1-1, B1-2 ...) in its top-right corner, load " +
-          `the forms with page 1 of each face down, and ${start}.`
-        : `Load the forms with page 1 of each - its Student ID page or side - face down, and ${start}.`;
+      // Which sides, for the one-sheet form: it comes in as two images a
+      // sheet, which the server pairs by their places in one file - or,
+      // saved one image a side, by the numbers the scanner gives them, once
+      // no more have come for STACK_SETTLE_MINUTES - so the stack is best
+      // one file, and no blank side may be dropped. Two sheets fed as one
+      // look like one sheet, so only the scanner can catch that. The
+      // two-sheet form is two sheets of one side each, said in its profile.
+      if (both) {
+        steps.push(
+          "For the form printed on <strong>both sides of one sheet</strong>, scan <strong>both sides</strong> " +
+            "(duplex) into one file for each stack, with <strong>skip blank pages</strong> off, so every sheet " +
+            "gives two images: its Student ID side and its Declaration side. Numbered images saved one a " +
+            `side are paired sheet by sheet too, once no more have come for ${STACK_SETTLE_MINUTES} minutes. ` +
+            "Keep <strong>double-feed " +
+            "detection</strong> on: two sheets fed as one come in as one child's Student ID side and the " +
+            "next child's Declaration side, and nothing else shows it."
+        );
+      }
+      let load;
+      if (BATCH_CODES) {
+        load =
+          "Write each form's batch code (B1-1, B1-2 ...) in its top-right corner, load " +
+          `the forms with page 1 of each face down, and ${start}.`;
+      } else if (both) {
+        load = `Load the forms with the Student ID side of each face down, and ${start}.`;
+      } else {
+        load = `Load the forms with page 1 of each face down, and ${start}.`;
+      }
       if (canWatchFolder) {
         steps.push(
           BATCH_CODES
@@ -1348,6 +1477,11 @@
       const named = watch.folder ? `"${watch.folder}"` : "";
       const asking = Boolean(watch.asking);
       const allowed = Boolean(watch.handle) && watch.permission === "granted";
+      // Nothing is read from the folder before the form being scanned is picked.
+      const locked = !paperForm;
+      scanFolderConnect.disabled = locked;
+      scanFolderToggle.disabled = locked;
+      scanFolderChange.disabled = locked;
       scanFolderToggle.hidden = !allowed || asking;
       scanFolderChange.hidden = !watch.handle;
       scanFolderConnect.hidden = allowed || asking;
@@ -1358,6 +1492,8 @@
       const sentToday = `${pages} page${pages === 1 ? "" : "s"} sent today`;
       if (!watch.handle) {
         setFolderState("No scan folder connected yet.", "");
+      } else if (locked) {
+        setFolderState(`${named} · Not watching yet - pick the form being scanned above`, "warn");
       } else if (asking) {
         setFolderState(`${named} · Not watching yet - answer the question below`, "warn");
       } else if (watch.permission !== "granted") {
@@ -1462,7 +1598,7 @@
       // Results that came in while the folder was not being watched - say,
       // while it waited for Reconnect - are sorted on the first look.
       watch.sortDue = true;
-      if (!watch.watching || !watch.handle || watch.permission !== "granted") return;
+      if (!watch.watching || !watch.handle || watch.permission !== "granted" || !paperForm) return;
       if (watch.polling || document.visibilityState === "hidden") return;
       watch.polling = true;
       // Stability needs two fresh looks - a size remembered from before the
@@ -1991,14 +2127,19 @@
       resumeWatching();
     }
 
+    // Each locked until the form being scanned is picked (paintFormChoice).
     scanFolderConnect.addEventListener("click", () => {
+      if (!paperForm) return;
       if (watch.handle && watch.permission !== "granted") reconnectScanFolder();
       else pickScanFolder();
     });
 
-    scanFolderChange.addEventListener("click", () => pickScanFolder());
+    scanFolderChange.addEventListener("click", () => {
+      if (paperForm) pickScanFolder();
+    });
 
     scanFolderToggle.addEventListener("click", async () => {
+      if (!paperForm) return;
       if (watch.watching) {
         stopWatching();
         return;
@@ -2050,6 +2191,12 @@
     }
 
     async function addScannedFiles(files) {
+      // Locked until the form being scanned is picked (paintFormChoice).
+      if (!paperForm) {
+        dropMessage.hidden = !files.length;
+        dropMessage.textContent = files.length ? "Not added - pick the form being scanned first." : "";
+        return;
+      }
       const scans = files.filter(isScanFile).sort(byScanOrder);
       const left = files.length - scans.length;
       dropMessage.hidden = left === 0;
@@ -2073,16 +2220,19 @@
       addScannedFiles(chosen);
     });
 
-    dropZone.addEventListener("click", () => fileInput.click());
+    dropZone.addEventListener("click", () => {
+      if (paperForm) fileInput.click();
+    });
     dropZone.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        fileInput.click();
+        if (paperForm) fileInput.click();
       }
     });
     ["dragenter", "dragover"].forEach((type) => {
       dropZone.addEventListener(type, (event) => {
-        if (!hasFiles(event)) return;
+        // Locked, it takes nothing: the window's own handler refuses the drop.
+        if (!hasFiles(event) || !paperForm) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = "copy";
         dropZone.classList.add("is-over");
@@ -2112,12 +2262,11 @@
     // What this computer and browser can do decides what the Scanner card
     // offers.
     function setUpScanning() {
-      if (platform === "handheld") {
-        // A phone or tablet runs no scanner software to set up.
-        scanFolderSetup.hidden = true;
-      } else {
-        scanFolderSteps.innerHTML = scanSetupHtml();
-      }
+      // A phone or tablet runs no scanner software to set up.
+      if (platform === "handheld") scanFolderSetup.hidden = true;
+      // The setup steps follow the form being scanned, and nothing can be
+      // scanned or added until one is picked.
+      paintFormChoice();
       if (canWatchFolder) {
         scanFolderNote.textContent = NOTE_WATCHING;
         paintScanFolder();

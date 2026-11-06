@@ -285,10 +285,11 @@ DECLARATION_WORK_WIDTH = 900
 DECLARATION_MATCH_MIN = float(os.getenv("DECLARATION_MATCH_MIN", "0.72"))
 DECLARATION_MATCH_MAX_X_FRACTION = 0.25
 # The form printed on both sides of one sheet has its "घोषणा" heading part
-# way down the back, at the left margin, so the heading is looked for down
-# the whole left margin as well (as the page came, then turned round), and a
-# page that matches this well is its Declaration side - unless its own
-# layout shows it is a Student ID page (extract_student_id._extract). The
+# way down the back, at the left margin, so on a page sent as that form
+# (paper_forms) the heading is looked for down the whole left margin as well
+# (as the page came, then turned round), and a page that matches this well
+# is its Declaration side - unless its own layout shows it is a Student ID
+# page (extract_student_id._extract). The
 # page and the heading are both blurred by DECLARATION_SIDE_BLUR (pixels at
 # DECLARATION_WORK_WIDTH) and the heading tried at each of
 # DECLARATION_SIDE_SCALES of its size, the best counting

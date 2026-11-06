@@ -1833,6 +1833,8 @@ def test_page_sends_the_switch_with_every_scan_and_remembers_it(client: FlaskCli
 
       const third = await visit(BROKEN);
       const brokenOn = third.byId["auto-upload"].checked;
+      // Nothing kept: the form being scanned is picked again on this visit.
+      pickForm(third, "two_sheet");
       setSwitch(third, false);
       const brokenOff = await send(third, "e.jpg", "p5");
       makeStorage = realStorage;
@@ -1843,7 +1845,9 @@ def test_page_sends_the_switch_with_every_scan_and_remembers_it(client: FlaskCli
     assert out["startsOn"] is True
     # With the page's id for files added by hand (test_page_sends_its_own_id_with_every_scan).
     assert re.fullmatch(r"[0-9a-f]{32}-1", out["on"].pop("sender"))
-    assert out["on"] == {"file": "a.jpg", "school": "School A", "location": "Pune", "auto_upload": "1"}
+    assert out["on"] == {
+        "file": "a.jpg", "school": "School A", "location": "Pune", "auto_upload": "1", "form": "two_sheet",
+    }
     assert out["off"]["auto_upload"] == "0"
     assert out["remembered"] == "off"
     assert out["secondOn"] is False and out["stillOff"]["auto_upload"] == "0"

@@ -57,6 +57,7 @@ from server.services.handwriting_ocr import (
 from server.services.history_store import log_scan_attempt
 from server.services.id_shape import as_student_id, loggable_reading
 from server.services.id_shape import looks_like_student_id as has_student_id_shape
+from server.services.paper_forms import TWO_SHEET, one_sheet
 from server.services.preprocess import (
     count_pages_from_bytes,
     load_image_from_bytes,
@@ -138,11 +139,12 @@ class ExtractResult:
     skip_reason: str = ""
     # 180 for a Declaration page whose heading was found only with the page
     # turned round - a sheet fed upside down - so the scan queue's worker
-    # turns its stored image to match. 0 for every other page.
+    # turns its stored image to match. 0 for every other page. Only the
+    # one-sheet form's pages are looked at turned round (paper_forms).
     orientation: int = 0
     # A Declaration page whose heading is part way down it, not at the top:
     # the back of a form printed on both sides of one sheet, whose front is
-    # its Student ID side.
+    # its Student ID side. Never on a page read as the two-sheet form.
     declaration_side: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -326,7 +328,7 @@ def extract_one_image(path, page_number: int, total: int) -> ExtractResult:
     return result
 
 
-def extract_from_image(image_bgr: np.ndarray, source: str) -> ExtractResult:
+def extract_from_image(image_bgr: np.ndarray, source: str, form: str = TWO_SHEET) -> ExtractResult:
     """OCR one page image already in memory, never raising for an unreadable page.
 
     The scan queue's worker reads pages it has stored itself, so there is
@@ -337,12 +339,14 @@ def extract_from_image(image_bgr: np.ndarray, source: str) -> ExtractResult:
     Args:
         image_bgr: The upright page, BGR.
         source: How to name the page in the log and in the result.
+        form: The paper form the page was sent as (paper_forms); the
+            two-sheet form unless it says otherwise.
 
     Returns:
         The reading.
     """
     try:
-        return _extract(image_bgr, source=source)
+        return _extract(image_bgr, source=source, form=form)
     except LookupUnavailable:
         raise
     except ExtractError as exc:
@@ -497,9 +501,14 @@ def _log_confirm_attempt(
         debug_log(f"[HISTORY] failed to log scan attempt: {exc}")
 
 
-def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
+def _extract(image_bgr: np.ndarray, source: str, form: str = TWO_SHEET) -> ExtractResult:
     """Pure OCR — never touches the database. Returns the single best raw
-    reading so the confirmation modal shows exactly what was scanned."""
+    reading so the confirmation modal shows exactly what was scanned.
+
+    `form` is the paper form the page was sent as (paper_forms): only on
+    the one-sheet form is a Declaration side looked for down the margin.
+    Every reader but the scan queue's worker sends none, and reads the
+    two-sheet form."""
     started = time.perf_counter()
     prepared = preprocess_for_ocr(image_bgr)
 
@@ -540,9 +549,11 @@ def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
     # no ladder. It is looked for down the whole left margin - and with the
     # page turned round, for a sheet fed upside down - unless the page is a
     # Student ID page by its own layout: a front is never taken for a back,
-    # whatever its heading score.
+    # whatever its heading score. Only on that form: a two-sheet form's
+    # Declaration page photographed or scanned low in the frame would be
+    # taken for a back, and paired as one (documents._sheets).
     ink = None if layout is None else _id_box_ink(prepared, layout)
-    if not _is_student_id_page(layout, ink):
+    if one_sheet(form) and not _is_student_id_page(layout, ink):
         heading = _find_heading(prepared)
         if heading is not None:
             turned, top = heading
@@ -554,12 +565,13 @@ def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
                 declaration_side=top >= DECLARATION_TOP_FRACTION,
             )
 
-    # A page with no ladder that the heading search did not claim. RapidOCR's
-    # model reads Chinese and English, not these Devanagari phrases, so this
-    # has not been seen to find one: the heading search above is what
-    # recognises Declaration pages. On real scans it took no page - as
-    # scanned none reached it; made black and white, the fronts whose ladder
-    # was not found did.
+    # A page with no ladder that the heading search did not claim, or - the
+    # two-sheet form - that the top-left check did not. RapidOCR's model
+    # reads Chinese and English, not these Devanagari phrases, so this has
+    # not been seen to find one: the heading checks above are what recognise
+    # Declaration pages. On real scans of the one-sheet form it took no
+    # page - as scanned none reached it; made black and white, the fronts
+    # whose ladder was not found did.
     if layout is None and _strip_says_declaration(prepared):
         return _skipped(source, "declaration", started)
 

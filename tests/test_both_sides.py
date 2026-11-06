@@ -2,8 +2,11 @@
 
 That form is one sheet: its Student ID side, and on the back the rest of the
 consent text with the "घोषणा" heading part way down - its Declaration side.
-Scanned both sides, every sheet gives two images. With batch codes off, as
-the app ships:
+Scanned both sides, every sheet gives two images. Every page here is sent,
+or read, as that form - the scan page's form choice, "one_sheet"
+(paper_forms); the two-sheet form, and pages sent with no form, are read and
+paired as before it was known (tests/test_form_choice.py). With batch codes
+off, as the app ships:
 
   - The reader knows a Declaration side by that heading anywhere down the
     left margin, as the page came or turned round - the worker then stores
@@ -38,6 +41,7 @@ FakeDrive; nothing leaves the test.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -56,7 +60,7 @@ from server.config import (
     LAYOUT_TRUST_ERROR,
 )
 from server.services import extract_student_id as ex
-from server.services import ocr_worker, scan_queue
+from server.services import ocr_worker, paper_forms, scan_queue
 from server.services.form_layout import FormMatch, identify_form
 from tests import test_auto_upload_stack as stack_tests
 from tests import test_batch_queue as queue_tests
@@ -98,6 +102,9 @@ students = queue_tests.students
 kids = stack_tests.kids
 drive = queue_tests.drive
 google = queue_tests.google
+
+# The form choice every page here is sent and read with (paper_forms).
+ONE_SHEET = paper_forms.ONE_SHEET
 
 # A drawn page: A4 at 150 dpi, as the scanner saves it in grey.
 WIDTH, HEIGHT = 1240, 1754
@@ -219,7 +226,7 @@ def nothing_read(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def test_the_heading_part_way_down_the_left_margin_makes_a_declaration_side(
     nothing_read: list[str], at: float
 ) -> None:
-    result = ex._extract(_bgr(_back(at)), source="duplex.tif (page 2/2)")
+    result = ex._extract(_bgr(_back(at)), source="duplex.tif (page 2/2)", form=ONE_SHEET)
 
     assert (result.skipped, result.skip_reason, result.declaration_side, result.orientation) == (
         True,
@@ -233,7 +240,7 @@ def test_the_heading_part_way_down_the_left_margin_makes_a_declaration_side(
 
 
 def test_a_back_fed_upside_down_is_found_turned_round(nothing_read: list[str]) -> None:
-    result = ex._extract(_bgr(cv2.rotate(_back(), cv2.ROTATE_180)), source="duplex.tif (page 1/2)")
+    result = ex._extract(_bgr(cv2.rotate(_back(), cv2.ROTATE_180)), source="duplex.tif (page 1/2)", form=ONE_SHEET)
 
     assert (result.skip_reason, result.declaration_side, result.orientation) == ("declaration", True, 180)
     assert nothing_read == []
@@ -250,7 +257,9 @@ def test_a_back_scanned_black_and_white_with_its_heading_printed_smaller_or_larg
     the threshold; blurred and at a range of sizes they match as a grey
     scan does.
     """
-    result = ex._extract(_bgr(_black_and_white(_back(size=size), scan)), source="duplex.tif (page 2/2)")
+    result = ex._extract(
+        _bgr(_black_and_white(_back(size=size), scan)), source="duplex.tif (page 2/2)", form=ONE_SHEET
+    )
 
     assert (result.skip_reason, result.declaration_side, result.orientation) == ("declaration", True, 0)
     assert nothing_read == []
@@ -276,8 +285,8 @@ def test_the_heading_at_the_top_left_of_its_own_sheet_is_a_declaration_page_as_b
     page = _bgr(_back(0.04))
     assert ex._looks_like_declaration(ex.preprocess_for_ocr(page))
 
-    upright = ex._extract(page, source="Scan 2.tiff")
-    turned = ex._extract(_bgr(cv2.rotate(_back(0.04), cv2.ROTATE_180)), source="Scan 4.tiff")
+    upright = ex._extract(page, source="Scan 2.tiff", form=ONE_SHEET)
+    turned = ex._extract(_bgr(cv2.rotate(_back(0.04), cv2.ROTATE_180)), source="Scan 4.tiff", form=ONE_SHEET)
 
     assert (upright.skip_reason, upright.declaration_side, upright.orientation) == ("declaration", False, 0)
     # Fed upside down it is found turned round now, and stays a page of its own sheet.
@@ -308,7 +317,7 @@ def test_a_student_id_page_with_handwriting_in_its_box_is_never_taken_for_a_decl
     monkeypatch.setattr(ex, "vision_configured", lambda: False)
     monkeypatch.setattr(ex, "_read_id_from_crop", read_crop)
 
-    result = ex._extract(page, source="duplex.tif (page 1/2)")
+    result = ex._extract(page, source="duplex.tif (page 1/2)", form=ONE_SHEET)
 
     assert not result.skipped and result.skip_reason == ""
     assert result.student_id == "AATKHA200618" and result.form_language == "hindi"
@@ -353,7 +362,7 @@ def test_a_page_without_the_heading_at_its_left_margin_is_read_for_its_student_i
     monkeypatch.setattr(ex, "crop_template_value", template)
     monkeypatch.setattr(ex, "debug_log", logged.append)
 
-    result = ex.extract_from_image(_bgr(page()), source="Scan 1.tiff")
+    result = ex.extract_from_image(_bgr(page()), source="Scan 1.tiff", form=ONE_SHEET)
 
     assert not result.skipped and result.student_id == ""
     assert result.error and result.error.startswith("No Student ID found on this page")
@@ -365,18 +374,20 @@ def test_a_page_without_the_heading_at_its_left_margin_is_read_for_its_student_i
     assert len(searched) == (2 if looked_at[0] == "top strip" else 0)
 
 
+@pytest.mark.parametrize("form", paper_forms.FORMS)
 @pytest.mark.parametrize(
     ("error", "skipped"),
     [(0.0010, True), (0.0062, False)],
     ids=["a box its ladder pins", "a box a loose fit only guesses at"],
 )
 def test_an_empty_student_id_box_skips_the_page_only_where_its_ladder_pins_the_box(
-    monkeypatch: pytest.MonkeyPatch, error: float, skipped: bool
+    monkeypatch: pytest.MonkeyPatch, error: float, skipped: bool, form: str
 ) -> None:
     """A loose fit's box lands rows from the Student ID, so its ink says nothing: that page is read like any other.
 
     Upright fronts that fit only loosely - kept upright now rather than
-    turned at a loose fit's word - were otherwise skipped unread.
+    turned at a loose fit's word - were otherwise skipped unread. The same
+    for both forms.
     """
     # The box this layout locates is a strip of empty paper below the page's words.
     layout = FormMatch(
@@ -400,7 +411,7 @@ def test_an_empty_student_id_box_skips_the_page_only_where_its_ladder_pins_the_b
     monkeypatch.setattr(ex, "_read_id_from_crop", read_crop)
     monkeypatch.setattr(ex, "crop_template_value", template)
 
-    result = ex.extract_from_image(_bgr(_front()), source="Scan 1.tiff")
+    result = ex.extract_from_image(_bgr(_front()), source="Scan 1.tiff", form=form)
 
     if skipped:
         assert (result.skipped, result.skip_reason) == (True, "empty_id") and looked == []
@@ -415,7 +426,10 @@ def test_the_worker_keeps_a_back_as_it_came_and_turns_one_fed_upside_down(
     """Neither is read for a Student ID; the one found only turned round is stored turned, so its thumbnail and PDF are upright."""
     upright = _back()
     response = _send(
-        client, "duplex.tif", _tiff([Image.fromarray(upright), Image.fromarray(cv2.rotate(upright, cv2.ROTATE_180))])
+        client,
+        "duplex.tif",
+        _tiff([Image.fromarray(upright), Image.fromarray(cv2.rotate(upright, cv2.ROTATE_180))]),
+        form=ONE_SHEET,
     )
     assert response.status_code == 202, response.get_json()
     ids = [page["page_id"] for page in response.get_json()["pages"]]
@@ -435,10 +449,11 @@ def test_the_worker_keeps_a_back_as_it_came_and_turns_one_fed_upside_down(
 
 
 # ================================================================== pairing
-def _file(client: FlaskClient, pages: int, name: str = "Scan 1.tif", **form: str) -> list[str]:
-    """One file of `pages` images, as the scanner saves a stack scanned both sides - sent with the switch on from scan page ONE."""
+def _file(client: FlaskClient, pages: int, name: str = "Scan 1.tif", **fields: str) -> list[str]:
+    """One file of `pages` images, as the scanner saves a stack scanned both sides - sent with the switch on from scan page ONE, as the one-sheet form."""
     images = [_form_page((620 + 10 * n, 874)) for n in range(pages)]
-    response = _send(client, name, _tiff(images), auto_upload="1", sender=ONE, **form)
+    fields.setdefault("form", ONE_SHEET)
+    response = _send(client, name, _tiff(images), auto_upload="1", sender=ONE, **fields)
     assert response.status_code == 202, response.get_json()
     return [page["page_id"] for page in response.get_json()["pages"]]
 
@@ -600,7 +615,7 @@ def test_a_side_read_before_its_other_side_is_taken_as_still_being_read(
     google: FlaskClient, fake_db: Any, kids: Students
 ) -> None:
     """Not shown until its other side is read; nothing is held across it, and a form before it waits for it."""
-    front = _queue(google, "Scan 1.tiff")[0]
+    front = _queue(google, "Scan 1.tiff", form=ONE_SHEET)[0]
     pages = _file(google, 4, "Scan 2.tif")
     after = _file(google, 2, "Scan 3.tif")
     _id_side(front, 0)
@@ -673,8 +688,8 @@ def test_files_of_one_image_each_with_no_running_number_pair_by_scan_order_as_be
 
     Their names end in no number, so they are no scanner session's images.
     """
-    front, back = _queue(google, "front.tiff")[0], _queue(google, "back.tiff")[0]
-    later_back, later_front = _queue(google, "back again.tiff")[0], _queue(google, "front again.tiff")[0]
+    front, back = (_queue(google, name, form=ONE_SHEET)[0] for name in ("front.tiff", "back.tiff"))
+    later_back, later_front = (_queue(google, name, form=ONE_SHEET)[0] for name in ("back again.tiff", "front again.tiff"))
     _id_side(front, 0)
     _declaration_side(back)
     _declaration_side(later_back)
@@ -776,7 +791,7 @@ def test_a_file_scanned_both_sides_in_among_other_scans_keeps_its_stack_waiting_
     _id_side(sheet[0], 0)
     _declaration_side(sheet[1])
     # One image each, named with no running number: no scanner session.
-    front, back = _queue(google, "front.tiff")[0], _queue(google, "back.tiff")[0]
+    front, back = (_queue(google, name, form=ONE_SHEET)[0] for name in ("front.tiff", "back.tiff"))
     _id_side(front, 1)
     _declaration_side(back)
     _later(SETTLE + 1)
@@ -801,28 +816,44 @@ def test_with_automatic_upload_off_a_clean_stack_of_sheets_still_waits_for_a_per
 
 # ================================================================== the page
 def test_page_says_to_scan_the_one_sheet_form_both_sides_and_the_two_sheet_form_one_side(client: FlaskClient) -> None:
+    """Each said for its own form only: shown once that form is picked (tests/test_form_choice.py)."""
     said = " ".join(_outside_scripts(client.get("/").get_data(as_text=True)).split())
 
-    for told in (
+    for where, told in (
         (
-            "For the form printed on both sides of one sheet, scan both sides into one file for each stack, with"
-            " skip blank pages off and double-feed detection on - numbered images saved one a side are paired"
-            f" too, once no more have come for {config.STACK_SETTLE_MINUTES} minutes; for the two-sheet form,"
-            " one side."
+            "how-sides-one",
+            (
+                "Scan both sides of each sheet into one file for each stack, with skip blank pages off and double-feed"
+                " detection on: its Student ID side and its Declaration side are one document. Numbered images saved"
+                f" one a side are paired too, once no more have come for {config.STACK_SETTLE_MINUTES} minutes."
+            ),
         ),
         (
-            "A file of several pages scanned both sides is paired sheet by sheet - pages 1 and 2, 3 and 4, and so"
-            " on - once all of it has been read, and so are the numbered images a scanner saves one a side, by"
-            f" their numbers, once no more have come for {config.STACK_SETTLE_MINUTES} minutes: each sheet's"
-            " Student ID side and Declaration side are one document, the Student ID side first, whichever side"
-            " came first; one whose Declaration side came first waits for you to check it."
+            "how-sides-two",
+            (
+                "Scan each form's Student ID page and, straight after it, its Declaration page: the two are one"
+                " document. Scan one side of each sheet."
+            ),
         ),
         (
-            "So does every form of a stack with a sheet scanned Declaration side first, a file scanned both sides"
-            " that does not pair into sheets, or such a file in among other scans."
+            "ocr-note-sides",
+            (
+                "A file of several pages scanned both sides is paired sheet by sheet - pages 1 and 2, 3 and 4, and so"
+                " on - once all of it has been read, and so are the numbered images a scanner saves one a side, by"
+                f" their numbers, once no more have come for {config.STACK_SETTLE_MINUTES} minutes: each sheet's"
+                " Student ID side and Declaration side are one document, the Student ID side first, whichever side"
+                " came first; one whose Declaration side came first waits for you to check it."
+            ),
+        ),
+        (
+            "auto-upload-sides",
+            (
+                "So does every form of a stack with a sheet scanned Declaration side first, a file scanned both sides"
+                " that does not pair into sheets, or such a file in among other scans."
+            ),
         ),
     ):
-        assert told in said, told
+        assert re.search(rf'<span id="{where}" hidden> ?{re.escape(told)}</span>', said), told
 
 
 @needs_node
@@ -843,6 +874,7 @@ def test_page_scanner_setup_says_which_sides_to_scan(
         navigator: {json.dumps(navigator)},
         showDirectoryPicker: async () => makeFolder(),
         indexedDB: makeIndexedDB(),
+        form: "one_sheet",
       }});
       return page.byId["scan-folder-steps"].innerHTML;
     """)
@@ -853,11 +885,12 @@ def test_page_scanner_setup_says_which_sides_to_scan(
         " its Student ID side and its Declaration side. Numbered images saved one a side are paired sheet by sheet"
         f" too, once no more have come for {config.STACK_SETTLE_MINUTES} minutes. Keep <strong>double-feed"
         " detection</strong> on: two sheets fed as one come in as one child's Student ID side and the next child's"
-        " Declaration side, and nothing else shows it. For the <strong>two-sheet form</strong>, scan one side"
-        " (<strong>simplex</strong>)."
+        " Declaration side, and nothing else shows it."
     )
     assert sides in out
-    assert "Load the forms with page 1 of each - its Student ID page or side - face down" in out
+    assert "Load the forms with the Student ID side of each face down" in out
+    # Picked as the one-sheet form, nothing says to scan one side.
+    assert "simplex" not in out and "two-sheet" not in out
     # One file for each scan is still what the steps ask for: numbered
     # images one a side are paired too, but only once the scan has finished.
     assert "JPEG" not in out and "JPG" not in out
@@ -878,7 +911,7 @@ def test_page_calls_a_sheets_two_parts_its_student_id_side_and_its_declaration_s
 ) -> None:
     """Only a form the server paired by place; one paired by scan order is a Student ID page and a Declaration page."""
     out = _run_page(client, tmp_path, _OFF_RESULTS_JS + r"""
-      const page = await openPage();
+      const page = await openPage({ form: "one_sheet" });
       const inFile = (id, at, extra) => pg(id, Object.assign({ source_name: "duplex.tif", source_page: at, source_pages: 6, both_sides: true }, extra));
       const back = inFile("p1", 1, { skip_reason: "declaration", message: "Declaration page, no Student ID." });
       const front = inFile("p2", 2, { student_id: ASHA.student_id, matched_student: ASHA, skip_reason: "" });

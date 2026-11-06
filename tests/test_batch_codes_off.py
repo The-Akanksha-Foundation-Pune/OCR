@@ -67,7 +67,7 @@ from flask.testing import FlaskClient
 
 from server import config
 from server.config import DECLARATION_WAIT_SECONDS, RUN_GAP_MINUTES
-from server.services import documents, ocr_worker, scan_queue
+from server.services import documents, ocr_worker, paper_forms, scan_queue
 from tests import test_batch_queue as queue_tests
 from tests.test_app import _run_page, needs_node
 from tests.test_batch_queue import (
@@ -251,11 +251,15 @@ def test_a_loose_fit_turned_round_does_not_turn_the_page(
     client: FlaskClient, students: Students, readers: Readers, monkeypatch: pytest.MonkeyPatch,
     queue_dir: Path, upright_fit: float | None,
 ) -> None:
-    """An upright page can fit some ladder upside down, loosely - on real scans upright fronts did - so it is kept as it came.
+    """An upright page of the one-sheet form can fit some ladder upside down, loosely - on real scans upright fronts did - so it is kept as it came.
 
-    Turned round at the fit's word, it would be stored and filed upside down.
+    Turned round at the fit's word, it would be stored and filed upside
+    down. The two-sheet form is turned at any better fit, as it always was
+    (tests/test_form_choice.py).
     """
-    [page_id] = _queue(client)
+    response = _send(client, "Scan 1.tiff", _tiff([_form_page()]), form=paper_forms.ONE_SHEET)
+    assert response.status_code == 202, response.get_json()
+    [page_id] = [page["page_id"] for page in response.get_json()["pages"]]
     before = (queue_dir / page_id / "page.jpg").read_bytes()
 
     def identify(image: np.ndarray) -> Any:
@@ -1483,9 +1487,12 @@ def test_page_asks_for_batch_codes_when_they_are_on(client: FlaskClient, monkeyp
 
     html = client.get("/").get_data(as_text=True)
     text = _outside_scripts(html)
+    # The form being scanned is still asked for: it decides how each page is read.
+    choice = re.search(r'<fieldset class="form-choice[^"]*" id="form-choice">.*?</fieldset>', text, re.DOTALL)
+    assert choice is not None and "a separate Declaration page" in choice.group(0)
 
     assert "Code each form, then scan" in text
-    assert "Declaration page" not in text
+    assert "Declaration page" not in text.replace(choice.group(0), "")
     assert "const BATCH_CODES = true;" in html
 
 

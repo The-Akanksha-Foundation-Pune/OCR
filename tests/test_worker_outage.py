@@ -41,7 +41,7 @@ import pytest
 from flask.testing import FlaskClient
 
 from server.config import QUEUE_DIR as REAL_QUEUE_DIR
-from server.services import ocr_worker, scan_queue, student_lookup
+from server.services import ocr_worker, paper_forms, scan_queue, student_lookup
 from server.services.batch_code import BatchCode, CodeReading
 from server.services.extract_student_id import ExtractResult
 from tests.test_app import _run_page, needs_node
@@ -169,7 +169,7 @@ def readers(monkeypatch: pytest.MonkeyPatch) -> Readers:
         fake.code_calls += 1
         return CodeReading(code=BatchCode(1, 1), confidence=0.9, raw="B1-1", region="top-right")
 
-    def read_student_id(_image_bgr: np.ndarray, source: str) -> ExtractResult:
+    def read_student_id(_image_bgr: np.ndarray, source: str, form: str = paper_forms.TWO_SHEET) -> ExtractResult:
         fake.id_calls += 1
         return ExtractResult(
             student_id="AATKHA200618", confidence=0.9, form_language="english", source=source

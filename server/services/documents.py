@@ -38,8 +38,11 @@ one a side (scan_session), and those pair by their places in the file or
 their numbers in the session, in either order, the Student ID side first in
 the document and the PDF, once the whole file has been read or the
 session's run has finished (_sheets); one whose Declaration side came first
-needs a person's look. A file or session that breaks that anywhere, and
-every other file of one page, pairs by scan order like any other. A form
+needs a person's look. Only pages sent as that form pair so
+(PageView.form, paper_forms): pages of the two-sheet form, and every page
+sent with no form, pair by scan order as they always did. A file or
+session that breaks that anywhere, and every other file of one page, pairs
+by scan order like any other. A form
 whose first page has no Student ID waits under Unsorted, its Declaration
 page with it, until one is typed. A Declaration page that joins no form
 waits under Unsorted on its own, and holds every form of its run for a
@@ -118,6 +121,7 @@ from server.services.extract_student_id import (
 )
 from server.services.history_store import log_scan_attempt, set_attempt_image_link
 from server.services.id_shape import as_student_id
+from server.services.paper_forms import TWO_SHEET, one_sheet
 from server.services.student_lookup import DB_ERRORS
 
 WAITING = "waiting"
@@ -335,6 +339,9 @@ class PageView:
     # its other side by their places in their file, or their numbers in
     # their scanner session (_sheets); False until the pairing has looked.
     both_sides: bool = False
+    # The paper form it was sent as (PageMeta.form, paper_forms): only the
+    # one-sheet form's pages pair by place (_sheets).
+    form: str = TWO_SHEET
     # Batch codes off, under Unsorted: the Declaration page of this page's
     # form, shown with it until its Student ID is typed (_documents_by_page).
     declaration_pages: list[PageView] = field(default_factory=list)
@@ -659,6 +666,7 @@ def load_page_view(
         error=meta.error if status == scan_queue.STATUS_FAILED else "",
         auto_upload=meta.auto_upload is True,
         sender=str(meta.sender) if scan_queue.is_sender(meta.sender) else "",
+        form=str(meta.form),
     )
     if overrides.declaration_of:
         view.declaration_of, view.declaration_by = overrides.declaration_of, overrides.declaration_by
@@ -1094,7 +1102,11 @@ def _sheets(run: list[PageView], open_ids: set[str], firsts: set[str], finished:
     image of a session of several, is read as a Declaration side, it pairs
     by place, whichever side of each sheet came first (_file_sheets,
     _session_sheets); its run's other files, and every other file of one
-    page, pair by scan order (_pair).
+    page, pair by scan order (_pair). Only a page sent as the one-sheet form
+    (PageView.form) is in such a file or session at all: a page of the
+    two-sheet form - or sent with no form - pairs by scan order, as every
+    page did before, and is one of the other scans below, whatever its
+    reading says.
 
     No form of the run goes up by itself (fault) with a sheet scanned
     Declaration side first, a file or session scanned both sides that breaks
@@ -1117,8 +1129,14 @@ def _sheets(run: list[PageView], open_ids: set[str], firsts: set[str], finished:
     groups: dict[tuple[Any, ...], list[tuple[int, PageView]]] = {}
     for page in run:
         session = _session_of(page)
-        if session is None:
-            key: tuple[Any, ...] = ("file", page.received_ns, page.source_name, page.source_pages, page.sender)
+        if not one_sheet(page.form):
+            # A page of its own: never a side of a sheet, however it was
+            # read - a page read before the form choice may say it is a
+            # Declaration side.
+            key: tuple[Any, ...] = ("two_sheet", page.page_id)
+            place = page.source_page
+        elif session is None:
+            key = ("file", page.received_ns, page.source_name, page.source_pages, page.sender)
             place = page.source_page
         else:
             key, place = ("session", page.sender, session[0]), session[1]
@@ -1128,7 +1146,10 @@ def _sheets(run: list[PageView], open_ids: set[str], firsts: set[str], finished:
     others = False
     for key, placed in groups.items():
         pages = [page for _place, page in placed]
-        if key[0] == "session":
+        if key[0] == "two_sheet":
+            kind, sheets, waiting = _OTHER, [], []
+            why = ""
+        elif key[0] == "session":
             kind, sheets, waiting = _session_sheets(placed, open_ids, firsts, finished)
             why = _REST_OF_SCAN
         else:

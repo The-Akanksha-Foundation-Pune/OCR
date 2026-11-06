@@ -75,6 +75,7 @@ from server.services.extract_student_id import (
 )
 from server.services.form_layout import identify_form
 from server.services.id_shape import is_canonical, looks_like_student_id
+from server.services.paper_forms import one_sheet
 from server.services.preprocess import load_page_grey
 from server.services.student_lookup import DB_ERRORS, probe_database
 
@@ -212,7 +213,7 @@ def _process_claim(claim: scan_queue.Claim) -> str:
     debug_log(
         f"[WORKER] {claim.page_id}: code={result.code!r} "
         f"id={'yes' if result.student_id else 'no'} "
-        f"matched={'yes' if result.matched_student else 'no'} orientation={result.orientation}"
+        f"matched={'yes' if result.matched_student else 'no'} orientation={result.orientation} form={meta.form}"
     )
     return READ
 
@@ -270,13 +271,15 @@ def read_ocr(meta: scan_queue.PageMeta) -> scan_queue.PageResult:
     """OCR a page: orientation, batch code and Student ID. No database.
 
     The page is tried both ways up and kept the way its form layout matches
-    better - turned round only on a close match (_layout_orientation). A
-    page with no layout to match (the signature page) is kept
-    whichever way up its batch code reads; the upside-down try is read by
-    the local recogniser only. A Declaration page whose heading the reader
-    finds only with the page turned round is turned round too, unless a
-    batch code was read in its corner. An upside-down page has its page.jpg
-    turned round, so the thumbnails and the PDF are upright too.
+    better - for the one-sheet form, turned round only on a close match
+    (_layout_orientation). A page with no layout to match (the signature
+    page) is kept whichever way up its batch code reads; the upside-down try
+    is read by the local recogniser only. A Declaration page whose heading
+    the reader finds only with the page turned round - which it looks for on
+    the one-sheet form only - is turned round too, unless a batch code was
+    read in its corner. An upside-down page has its page.jpg turned round,
+    so the thumbnails and the PDF are upright too. The reader is told the
+    page's form (PageMeta.form, paper_forms).
 
     With batch codes off (config.batch_codes_on) the code is not read, and
     a page with no layout to match is kept as it was scanned - but for a
@@ -287,7 +290,7 @@ def read_ocr(meta: scan_queue.PageMeta) -> scan_queue.PageResult:
         grey = _normalise_again(meta)
     work = _working_copy(grey)
 
-    angle = _layout_orientation(work)
+    angle = _layout_orientation(work, meta.form)
     if not batch_codes_on():
         # No batch codes: the corner is not read at all, here or by Google,
         # and a page with no layout to match is kept the way it was scanned.
@@ -327,7 +330,7 @@ def read_ocr(meta: scan_queue.PageMeta) -> scan_queue.PageResult:
     label = meta.source_name or "scan"
     if meta.source_pages > 1:
         label = f"{label} (page {meta.source_page}/{meta.source_pages})"
-    extracted = read_student_id(cv2.cvtColor(work, cv2.COLOR_GRAY2BGR), label)
+    extracted = read_student_id(cv2.cvtColor(work, cv2.COLOR_GRAY2BGR), label, form=meta.form)
     if extracted.skipped:
         reason = extracted.skip_reason or "blank"
         if reason == "declaration" and extracted.orientation == 180 and code.code is None:
@@ -363,17 +366,25 @@ def read_ocr(meta: scan_queue.PageMeta) -> scan_queue.PageResult:
     )
 
 
-def _layout_orientation(work: np.ndarray) -> int | None:
+def _layout_orientation(work: np.ndarray, form: str) -> int | None:
     """0 or 180, whichever way up the form's ruled layout matches better.
 
-    None when neither does (a page with no Student ID rules on it) - and
-    when the better match is turned round but loose, wider than
-    LAYOUT_TRUST_ERROR: an upright page can fit some ladder loosely upside
-    down, often another language's. On real scans some upright fronts
-    did, at 0.0061-0.0065 against 0.009-0.010 as they came, and some backs
-    at 0.018 against none: turned round at that word, they would be stored
-    and filed upside down. Such a page is left to its batch code, or with
-    batch codes off kept as it was scanned.
+    None when neither does (a page with no Student ID rules on it) - and,
+    for the one-sheet form (paper_forms), when the better match is turned
+    round but loose, wider than LAYOUT_TRUST_ERROR: an upright page can fit
+    some ladder loosely upside down, often another language's. On real
+    scans of that form some upright fronts did, at 0.0061-0.0065 against
+    0.009-0.010 as they came, and some backs at 0.018 against none: turned
+    round at that word, they would be stored and filed upside down. Such a
+    page is left to its batch code, or with batch codes off kept as it was
+    scanned. The two-sheet form is turned round at any better match, as it
+    always was: on real scans some of its upside-down Student ID pages
+    matched only loosely turned round, and would be left upside down if
+    only a close match turned a page.
+
+    Args:
+        work: The page at the reader's working size, grey.
+        form: The page's paper form (PageMeta.form).
     """
     best: tuple[float, int] | None = None
     for angle in (0, 180):
@@ -381,7 +392,7 @@ def _layout_orientation(work: np.ndarray) -> int | None:
         match = identify(cv2.cvtColor(image, cv2.COLOR_GRAY2BGR))
         if match is not None and (best is None or match.error < best[0]):
             best = (match.error, angle)
-    if best is None or (best[1] == 180 and best[0] > LAYOUT_TRUST_ERROR):
+    if best is None or (one_sheet(form) and best[1] == 180 and best[0] > LAYOUT_TRUST_ERROR):
         return None
     return best[1]
 

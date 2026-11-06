@@ -2,7 +2,10 @@
 
 A scanner that saves a scan one image a side numbers the images of one scan
 in turn - 20260101120000_0001.jpg, 20260101120000_0002.jpg ... or Scan 1.jpeg,
-Scan 2.jpeg ... With batch codes off, as the app ships:
+Scan 2.jpeg ... Every image here is sent as the one-sheet form - the scan
+page's form choice, "one_sheet" (paper_forms): the two-sheet form's images,
+and those sent with no form, are in no session and pair by scan order as
+before (tests/test_form_choice.py). With batch codes off, as the app ships:
 
   - documents.scan_session names a file's session - its name without the
     number, compared without case - and its number there; a name ending in
@@ -44,7 +47,7 @@ import pytest
 from flask.testing import FlaskClient
 
 from server import config
-from server.services import documents, ocr_worker, scan_queue
+from server.services import documents, ocr_worker, paper_forms, scan_queue
 from tests import test_auto_upload_stack as stack_tests
 from tests import test_batch_queue as queue_tests
 from tests.test_app import _run_page, needs_node
@@ -116,11 +119,12 @@ def _no_worker_thread(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ------------------------------------------------------------------ helpers
-def _sent(client: FlaskClient, name: str, sender: str = ONE, **form: str) -> str:
-    """One file of one image, as the scan page sends it with the switch on - a JPEG, or for .tif a TIFF."""
+def _sent(client: FlaskClient, name: str, sender: str = ONE, **fields: str) -> str:
+    """One file of one image, as the scan page sends it with the switch on, as the one-sheet form - a JPEG, or for .tif a TIFF."""
     page = _form_page((next(_WIDTHS), 874))
     data = _tiff([page]) if name.lower().endswith((".tif", ".tiff")) else _jpeg(page)
-    response = _send(client, name, data, auto_upload="1", sender=sender, **form)
+    fields.setdefault("form", paper_forms.ONE_SHEET)
+    response = _send(client, name, data, auto_upload="1", sender=sender, **fields)
     assert response.status_code == 202, response.get_json()
     [sent] = response.get_json()["pages"]
     return str(sent["page_id"])
@@ -550,7 +554,12 @@ def test_a_stack_of_sessions_and_files_scanned_both_sides_in_plain_order_goes_up
 ) -> None:
     images = [_sent(google, name) for name in _numbered(2, "Scan {}.jpeg")]
     response = _send(
-        google, "duplex.tif", _tiff([_form_page((next(_WIDTHS), 874)) for _ in range(4)]), auto_upload="1", sender=ONE
+        google,
+        "duplex.tif",
+        _tiff([_form_page((next(_WIDTHS), 874)) for _ in range(4)]),
+        auto_upload="1",
+        sender=ONE,
+        form=paper_forms.ONE_SHEET,
     )
     assert response.status_code == 202, response.get_json()
     pages = [page["page_id"] for page in response.get_json()["pages"]]
@@ -636,7 +645,7 @@ def test_with_batch_codes_on_numbered_images_are_gathered_by_their_codes_as_befo
 def test_page_says_a_sheet_waits_for_the_rest_of_its_scan(client: FlaskClient, tmp_path: Path) -> None:
     """Not for its Declaration page, which it has: its card's pill and the status line say so, and there is no Confirm."""
     out = _run_page(client, tmp_path, _OFF_RESULTS_JS + r"""
-      const page = await openPage();
+      const page = await openPage({ form: "one_sheet" });
       const RAVI = { student_id: "RAVKUM020315", student_name: "Ravi Kumar", school_name: "School A", grade_name: "5", division_name: "B" };
       const side = (id, extra) => pg(id, Object.assign({ both_sides: true, skip_reason: "" }, extra));
       const front = side("p1", { source_name: "20260101120000_0001.jpg", student_id: ASHA.student_id, matched_student: ASHA });
