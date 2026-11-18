@@ -71,6 +71,7 @@ from server.services.debug_log import debug_log
 from server.services.extract_student_id import (
     LookupUnavailable,
     extract_from_image,
+    looks_like_declaration,
     lookup_student_read_only,
 )
 from server.services.form_layout import identify_form
@@ -109,6 +110,7 @@ STATE_REFRESH_SECONDS = 30.0
 STATE_STALE_SECONDS = 120.0
 
 BLANK_MESSAGE = "This page looks blank."
+DECLARATION_MESSAGE = "Declaration page, no Student ID."
 
 # The stale-claim sweep lists _reading/; once a minute is plenty for a
 # claim that is only stale after ten.
@@ -324,6 +326,14 @@ def read_ocr(meta: scan_queue.PageMeta) -> scan_queue.PageResult:
         read_at=_stamp(),
     )
     if float(np.mean(work < 160)) < BLANK_PAGE_INK_RATIO:
+        # A signed back page can carry less ink than the blank threshold
+        # (a BOPEMS "सहमति की पुष्टि" page measured 1.5%). Its printed
+        # heading says what it is, and it must stay with its form rather
+        # than be set aside as a blank side.
+        if looks_like_declaration(cv2.cvtColor(work, cv2.COLOR_GRAY2BGR)):
+            return replace(
+                reading, skip_reason="declaration", message=DECLARATION_MESSAGE, declaration_side=False
+            )
         # The reader would only conclude the same, after a costly first pass.
         return replace(reading, blank=True, skip_reason="blank", message=BLANK_MESSAGE)
 
@@ -343,7 +353,7 @@ def read_ocr(meta: scan_queue.PageMeta) -> scan_queue.PageResult:
             reading = replace(reading, orientation=(reading.orientation + 180) % 360)
         skipped_message = {
             "blank": BLANK_MESSAGE,
-            "declaration": "Declaration page, no Student ID.",
+            "declaration": DECLARATION_MESSAGE,
             "empty_id": "Student ID line is empty.",
         }.get(reason, "This page was skipped.")
         return replace(

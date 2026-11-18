@@ -15,6 +15,7 @@ from server.config import (
     BASE_DIR,
     BLANK_ID_INK_RATIO,
     BLANK_PAGE_INK_RATIO,
+    DECLARATION_EXTRA_HEADINGS,
     DECLARATION_HEADING_PATH,
     DECLARATION_MATCH_MAX_X_FRACTION,
     DECLARATION_MATCH_MIN,
@@ -517,6 +518,11 @@ def _extract(image_bgr: np.ndarray, source: str, form: str = TWO_SHEET) -> Extra
     # ~27s to conclude what a pixel count answers instantly, and in a
     # 500-form batch those add up to hours.
     if _is_blank_page(prepared):
+        # A signed back page can carry less ink than that (a BOPEMS
+        # "सहमति की पुष्टि" page measured 1.5%). Its heading says what it is,
+        # and it must stay with its form, not be set aside as blank.
+        if _looks_like_declaration(prepared):
+            return _skipped(source, "declaration", started)
         return _skipped(source, "blank", started)
 
     # "घोषणा" at the top is enough on its own. Declaration pages sometimes
@@ -851,8 +857,53 @@ def _heading_needle(width: int, size: float = 1.0) -> np.ndarray | None:
     return cv2.resize(template, (tw, th), interpolation=cv2.INTER_AREA)
 
 
+def looks_like_declaration(image_bgr: np.ndarray) -> bool:
+    """Public name for _looks_like_declaration, for the OCR worker."""
+    return _looks_like_declaration(image_bgr)
+
+
+_extra_headings: list[tuple[np.ndarray, int, float]] | None = None
+
+
+def _extra_heading_images() -> list[tuple[np.ndarray, int, float]]:
+    """DECLARATION_EXTRA_HEADINGS, loaded once. A missing file is logged and left out."""
+    global _extra_headings
+    if _extra_headings is None:
+        loaded: list[tuple[np.ndarray, int, float]] = []
+        for path, page_width, top_fraction in DECLARATION_EXTRA_HEADINGS:
+            image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+            if image is None:
+                debug_log(f"[SKIP] declaration heading image missing: {path}")
+                continue
+            loaded.append((image, page_width, top_fraction))
+        _extra_headings = loaded
+    return _extra_headings
+
+
+def _looks_like_extra_declaration(image_bgr: np.ndarray) -> bool:
+    """True when one of DECLARATION_EXTRA_HEADINGS sits at the top left."""
+    height = image_bgr.shape[0]
+    for template, page_width, top_fraction in _extra_heading_images():
+        strip = _at_work_width(image_bgr[: max(1, int(height * top_fraction))])
+        gray = cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY) if strip.ndim == 3 else strip
+        scale = gray.shape[1] / page_width
+        tw = max(8, int(template.shape[1] * scale))
+        th = max(8, int(template.shape[0] * scale))
+        if th >= gray.shape[0] or tw >= gray.shape[1]:
+            continue
+        needle = cv2.resize(template, (tw, th), interpolation=cv2.INTER_AREA)
+        scores = cv2.matchTemplate(gray, needle, cv2.TM_CCOEFF_NORMED)
+        _, best, _, where = cv2.minMaxLoc(scores)
+        if best >= DECLARATION_MATCH_MIN and where[0] <= gray.shape[1] * DECLARATION_MATCH_MAX_X_FRACTION:
+            return True
+    return False
+
+
 def _looks_like_declaration(image_bgr: np.ndarray) -> bool:
-    """True when the printed घोषणा heading sits at the top left."""
+    """True when the printed घोषणा heading - or one of DECLARATION_EXTRA_HEADINGS,
+    such as the Hindi "सहमति की पुष्टि" - sits at the top left."""
+    if _looks_like_extra_declaration(image_bgr):
+        return True
     strip = _top_strip(image_bgr)
     gray = cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY) if strip.ndim == 3 else strip
     # The strip is at DECLARATION_WORK_WIDTH, and the heading scaled to match.

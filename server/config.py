@@ -308,6 +308,16 @@ DECLARATION_SIDE_SCALES = (0.9, 0.95, 1.0, 1.05, 1.1)
 # and a 200 DPI PDF scale the same template.
 DECLARATION_TEMPLATE_PAGE_WIDTH = 1655
 DECLARATION_HEADING_PATH = DATA_DIR / "labels" / "ghoshana.png"
+# Other two-sheet back pages, recognised at the top left only, each as
+# (heading image, width of the page it was cut from, how far down the page
+# its heading may reach). Kept apart from the "घोषणा" heading so the
+# one-sheet margin search and DECLARATION_TOP_FRACTION stay as they are.
+#   sahmati_ki_pushti.png - "सहमति की पुष्टि", the back page of the Hindi
+#   form BOPEMS uses, cut from a real BOPEMS scan; its bottom edge sits at
+#   0.17 of the page, below the 0.15 strip above.
+DECLARATION_EXTRA_HEADINGS = (
+    (DATA_DIR / "labels" / "sahmati_ki_pushti.png", 1662, 0.22),
+)
 # Used only when the heading image does not match and the page has no form
 # ladder. RapidOCR is run on the top strip, never the whole page.
 DECLARATION_PHRASES = (
