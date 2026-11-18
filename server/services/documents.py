@@ -39,7 +39,9 @@ from PIL import Image
 from server.config import (
     DONE_DOCUMENTS_HOURS,
     DRIVE_OCR_FOLDER_NAME,
+    FORM_PAGE_COUNTS,
     QUEUE_CLAIM_STALE_SECONDS,
+    UNCODED_FORM_SCHOOLS,
 )
 from server.services import drive_store, scan_queue
 from server.services.batch_code import parse_batch_code
@@ -66,6 +68,7 @@ NO_ID = "no_id"
 NO_MATCH = "no_match"
 CONFLICT = "conflict"
 CODE_REUSED = "code_reused"
+SAME_STUDENT = "same_student"
 
 # A page with no marker is only "lost" once nothing has touched its
 # meta.json for as long as a reader may hold a claim: every claim, release
@@ -96,6 +99,21 @@ _STUDENT_FIELDS = (
 )
 
 ImageUrl = Callable[[str, str], str]
+
+# Forms printed without a batch code - BOPEMS's Hindi form, with only its
+# printed circled serials - are paired by scan order instead, for the schools
+# in UNCODED_FORM_SCHOOLS only: a page with a
+# Student ID starts a form, and the later pages scanned straight after it
+# join it. They are given codes in batch 0 ("B0-1", "B0-2", ...), which no
+# written code can be, so they never mix with a batch staff wrote.
+AUTO_BATCH = 0
+AUTO_CODE_SOURCE = "auto"
+AUTO_BATCH_LABEL = "No batch code"
+# Pages the reader recognised as a form's later pages. A blank side is not
+# one: it neither joins a form nor ends one, so a duplex scan's blank backs
+# do not split a form from its signature page.
+_LATER_PAGE_REASONS = frozenset({"declaration", "continuation"})
+_MAX_FORM_PAGES = max(FORM_PAGE_COUNTS.values())
 
 
 class DocumentError(Exception):
@@ -141,6 +159,7 @@ class PageView:
     message: str = ""
     orientation: int = 0
     blank: bool = False
+    skip_reason: str = ""
     error: str = ""
     in_document: str | None = None
     needs_person: bool = False
@@ -178,6 +197,7 @@ class PageView:
             "message": self.message,
             "orientation": self.orientation,
             "blank": self.blank,
+            "skip_reason": self.skip_reason,
             "error": self.error,
             "document_key": self.in_document,
             # Unreadable: the page should be shown, full size, for a person
@@ -293,7 +313,7 @@ class Snapshot:
             out.append(
                 {
                     "batch": batch,
-                    "label": f"B{batch}",
+                    "label": AUTO_BATCH_LABEL if batch == AUTO_BATCH else f"B{batch}",
                     "documents": [doc.to_dict(image_url) for doc in docs],
                     "counts": counts,
                 }
@@ -352,6 +372,7 @@ def load_page_view(
         view.message = result.message
         view.orientation = result.orientation
         view.blank = result.blank
+        view.skip_reason = result.skip_reason
     if status == scan_queue.STATUS_FAILED:
         view.message = (
             f"Could not read this page after {meta.attempts} tries. "
@@ -401,8 +422,12 @@ def snapshot(owner_email: str) -> Snapshot:
     every_page = sorted(open_views + [p for doc in done for p in doc.pages], key=lambda p: p.order)
 
     by_code: dict[str, list[PageView]] = {}
+    for code, parts in _pair_uncoded(open_views).items():
+        by_code[code] = parts
     unsorted: list[PageView] = []
     for view in open_views:
+        if view.code_source == AUTO_CODE_SOURCE:
+            continue
         if view.code:
             by_code.setdefault(view.code, []).append(view)
         elif view.status in (scan_queue.STATUS_READ, scan_queue.STATUS_FAILED):
@@ -418,12 +443,109 @@ def snapshot(owner_email: str) -> Snapshot:
         _judge(doc, every_page, position, done)
         open_docs.append(doc)
 
+    _flag_same_student(open_docs, done)
+
     unsorted.sort(key=lambda p: p.order, reverse=True)
     return Snapshot(
         pages=sorted(every_page, key=lambda p: p.order, reverse=True),
         documents=open_docs + done,
         unsorted=unsorted,
     )
+
+
+_AUTO_CODE = re.compile(rf"B{AUTO_BATCH}-(\d{{1,3}})")
+
+
+def _flag_same_student(open_docs: list[Document], done: list[Document]) -> None:
+    """Hold back a Ready form whose student another form already has.
+
+    The same child's form scanned twice, or an ID misread as a classmate's,
+    would otherwise be filed twice with nothing to say so. It stays
+    confirmable - a second copy may be meant - but a person has to look.
+    """
+    def student_of(doc: Document) -> str:
+        return str((doc.matched_student or {}).get("student_id") or "")
+
+    for doc in open_docs:
+        sid = student_of(doc)
+        if doc.status != READY or not sid:
+            continue
+        confirmed = [d for d in done if student_of(d) == sid]
+        others = [d for d in open_docs if d is not doc and student_of(d) == sid]
+        if not confirmed and not others:
+            continue
+        doc.attention.append(SAME_STUDENT)
+        doc.status = NEEDS_ATTENTION
+        who = (doc.matched_student or {}).get("student_name") or sid
+        if confirmed:
+            doc.message = (
+                f"{who} ({sid}) was already confirmed from another form. "
+                "Check this is not the same form scanned again."
+            )
+        else:
+            doc.message = (
+                f"{who} ({sid}) is also on " + ", ".join(d.code for d in others)
+                + ". Check the ID against the paper before confirming both."
+            )
+
+
+def _code_parts(code: str) -> tuple[int, int] | None:
+    """(batch, number) of a written code or an automatic one, else None."""
+    parsed = parse_batch_code(code)
+    if parsed is not None:
+        return parsed.batch, parsed.number
+    auto = _AUTO_CODE.fullmatch(code or "")
+    return (AUTO_BATCH, int(auto.group(1))) if auto else None
+
+
+def _pair_uncoded(views: list[PageView]) -> dict[str, list[PageView]]:
+    """Group the pages that carry no batch code into forms, by scan order.
+
+    A page with a Student ID (read or typed) starts a form. A page read as
+    a later page of a form (declaration, or a continuation page) scanned
+    after it joins it, up to the longest printed form. Anything else ends
+    the run and stays Unsorted for a person: an unread page (it may be the
+    next form's first page), one that could not be read, or one with no ID
+    that is not a known later page - an unreadable first page must never be
+    filed as part of the form before it. A blank side is passed over.
+
+    Only pages scanned for a school in UNCODED_FORM_SCHOOLS are paired.
+    The pages are given their codes here (code_source "auto"); nothing is
+    stored, so a code typed on any of them takes over at once.
+
+    Returns:
+        Code -> parts in scan order, for the forms found.
+    """
+    forms: list[list[PageView]] = []
+    current: list[PageView] | None = None
+    uncoded = (
+        v for v in views if not v.code and (v.school or "").strip().upper() in UNCODED_FORM_SCHOOLS
+    )
+    for view in sorted(uncoded, key=lambda v: v.order):
+        if view.status != scan_queue.STATUS_READ:
+            current = None
+        elif view.student_id:
+            current = [view]
+            forms.append(current)
+        elif view.skip_reason == "blank":
+            continue
+        elif (
+            current is not None
+            and view.skip_reason in _LATER_PAGE_REASONS
+            and len(current) < _MAX_FORM_PAGES
+            and (view.school, view.location) == (current[0].school, current[0].location)
+        ):
+            current.append(view)
+        else:
+            current = None
+
+    paired: dict[str, list[PageView]] = {}
+    for number, parts in enumerate(forms[:999], start=1):
+        code = f"B{AUTO_BATCH}-{number}"
+        for part in parts:
+            part.code, part.code_source = code, AUTO_CODE_SOURCE
+        paired[code] = parts
+    return paired
 
 
 def get_document(owner_email: str, key: str) -> Document | None:
@@ -440,8 +562,7 @@ def get_document(owner_email: str, key: str) -> Document | None:
 
 
 def _open_document(code: str, parts: list[PageView]) -> Document:
-    parsed = parse_batch_code(code)
-    batch, number = (parsed.batch, parsed.number) if parsed else (0, 0)
+    batch, number = _code_parts(code) or (0, 0)
     first = parts[0]
     return Document(
         key=code,
@@ -489,7 +610,10 @@ def _judge(
         attention.append(NO_ID)
         doc.message = "No Student ID was read. Type it from the image."
 
-    earlier = [d for d in done if d.code == doc.code]
+    # An automatic code is a position in the scan order, not something
+    # written on the paper, so an earlier form with the same one is not a
+    # reused code.
+    earlier = [d for d in done if d.code == doc.code] if doc.batch != AUTO_BATCH else []
     if earlier:
         attention.append(CODE_REUSED)
         who = (earlier[0].matched_student or {}).get("student_name") or earlier[0].student_id
@@ -528,9 +652,10 @@ def _document_from_record(
 ) -> Document | None:
     key = str(record.get("key") or "")
     code = str(record.get("code") or "")
-    parsed = parse_batch_code(code)
-    if not scan_queue.is_document_key(key) or parsed is None:
+    parts = _code_parts(code)
+    if not scan_queue.is_document_key(key) or parts is None:
         return None
+    batch, number = parts
     pages = [
         view
         for pid in record.get("page_ids") or []
@@ -560,8 +685,8 @@ def _document_from_record(
     return Document(
         key=key,
         code=code,
-        batch=parsed.batch,
-        number=parsed.number,
+        batch=batch,
+        number=number,
         pages=pages,
         status=UPLOADED if uploaded else CONFIRMED,
         message=message,
@@ -867,7 +992,12 @@ def drive_location(record: dict[str, Any]) -> tuple[list[str], str]:
         drive_store.drive_safe_name(str(student.get("division_name") or ""), "Unknown division"),
         person,
     ]
-    file_name = drive_store.drive_safe_name(f"{person}_{record.get('code')}", person) + ".pdf"
+    code = str(record.get("code") or "")
+    # An automatic code means nothing on the paper, so it stays out of the
+    # file name; a second PDF for the student is named "... (2)" as ever.
+    if _AUTO_CODE.fullmatch(code):
+        code = ""
+    file_name = drive_store.drive_safe_name(f"{person}_{code}" if code else person, person) + ".pdf"
     return folders, file_name
 
 

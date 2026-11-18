@@ -67,6 +67,7 @@ from server.services.debug_log import debug_log
 from server.services.extract_student_id import (
     LookupUnavailable,
     extract_from_image,
+    looks_like_declaration,
     lookup_student_read_only,
 )
 from server.services.form_layout import identify_form
@@ -304,6 +305,16 @@ def read_ocr(meta: scan_queue.PageMeta) -> scan_queue.PageResult:
         read_at=_stamp(),
     )
     if float(np.mean(work < 160)) < BLANK_PAGE_INK_RATIO:
+        # A signed back page can carry less ink than the blank threshold
+        # (a BOPEMS "सहमति की पुष्टि" page measured 1.5%). Its printed
+        # heading says what it is, and it must stay a part of its form
+        # rather than be set aside as a blank side.
+        if looks_like_declaration(cv2.cvtColor(work, cv2.COLOR_GRAY2BGR)):
+            return replace(
+                reading,
+                skip_reason="declaration",
+                message="Declaration page, no Student ID.",
+            )
         # The reader would only conclude the same, after a costly first pass.
         return replace(reading, blank=True, skip_reason="blank", message=BLANK_MESSAGE)
 

@@ -2145,15 +2145,21 @@
     }
 
     // "B1" for 1, "1" or "b1".
+    // Batch 0 is the server's own: forms printed without a batch code,
+    // paired by scan order. It is never a scan-folder batch.
+    const AUTO_BATCH_LABEL = "No batch code";
+
     function batchLabel(value) {
       const text = String(value === undefined || value === null ? "" : value).trim().toUpperCase();
       const m = text.match(/^B?(\d{1,3})$/);
+      if (m && Number(m[1]) === 0) return AUTO_BATCH_LABEL;
       return m ? "B" + Number(m[1]) : text;
     }
 
     // The batch of a code such as "B1-12".
     function codeBatch(code) {
       const m = String(code || "").trim().toUpperCase().match(/^B(\d{1,3})-\d{1,3}$/);
+      if (m && Number(m[1]) === 0) return AUTO_BATCH_LABEL;
       return m ? "B" + Number(m[1]) : "";
     }
 

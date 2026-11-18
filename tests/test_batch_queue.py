@@ -46,6 +46,7 @@ from flask.testing import FlaskClient
 from PIL import Image, ImageDraw, features
 
 from server.services import (
+    documents,
     drive_store,
     ocr_worker,
     scan_queue,
@@ -1626,3 +1627,151 @@ def test_the_queue_routes_need_sign_in(app: Flask) -> None:
     assert anonymous.get("/api/batches").status_code == 401
     assert anonymous.get("/api/documents/B1-1").status_code == 401
     assert anonymous.post("/api/documents/B1-1/confirm", json={"student_id": "X"}).status_code == 401
+
+
+# ================================================== forms with no batch code
+# BOPEMS prints its Hindi form with no B1-12 code, only circled serials. For
+# a school in UNCODED_FORM_SCHOOLS the pages are paired by scan order.
+@pytest.fixture
+def uncoded_school(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(documents, "UNCODED_FORM_SCHOOLS", {SCHOOL})
+
+
+def _read_as(page_id: str, student_id: str = "", matched: dict[str, Any] | None = None, skip: str = "") -> None:
+    """Mark a page read with no code, as a reading of the given kind."""
+    _read(page_id, None, student_id, matched)
+    result = scan_queue.load_result(page_id)
+    assert result is not None
+    from dataclasses import replace as _replace
+
+    scan_queue.save_result(page_id, _replace(result, skip_reason=skip, blank=skip == "blank"))
+
+
+def test_an_uncoded_form_pairs_its_signature_page(client: FlaskClient, uncoded_school: None) -> None:
+    first = _queue(client, "Scan 1.tiff")[0]
+    second = _queue(client, "Scan 2.tiff")[0]
+    _read_as(first, "AATKHA200618", dict(AATIF))
+    _read_as(second, skip="declaration")
+
+    body = _batches(client)
+
+    [batch] = body["batches"]
+    assert batch["batch"] == 0 and batch["label"] == "No batch code"
+    [doc] = batch["documents"]
+    assert doc["key"] == "B0-1" and doc["parts"] == 2
+    assert [p["page_id"] for p in doc["pages"]] == [first, second]
+    assert doc["status"] == "ready" and doc["can_confirm"] is True
+    assert [p["needs_person"] for p in doc["pages"]] == [False, False]
+    assert body["unsorted"] == []
+
+
+def test_uncoded_forms_follow_scan_order_and_pass_over_blank_sides(
+    client: FlaskClient, uncoded_school: None
+) -> None:
+    pages = [_queue(client, f"Scan {n}.tiff")[0] for n in range(1, 8)]
+    _read_as(pages[0], "AATKHA200618", dict(AATIF))
+    _read_as(pages[1], skip="blank")
+    _read_as(pages[2], skip="continuation")
+    _read_as(pages[3], skip="declaration")
+    _read_as(pages[4], "MOHSHA011021", dict(MOHSHA))
+    _read_as(pages[5], skip="blank")
+    _read_as(pages[6], skip="declaration")
+
+    body = _batches(client)
+
+    docs = {d["key"]: [p["page_id"] for p in d["pages"]] for d in body["batches"][0]["documents"]}
+    assert docs == {"B0-1": [pages[0], pages[2], pages[3]], "B0-2": [pages[4], pages[6]]}
+    assert sorted(p["page_id"] for p in body["unsorted"]) == sorted([pages[1], pages[5]])
+
+
+def test_an_unreadable_first_page_never_joins_the_form_before_it(
+    client: FlaskClient, uncoded_school: None
+) -> None:
+    pages = [_queue(client, f"Scan {n}.tiff")[0] for n in range(1, 5)]
+    _read_as(pages[0], "AATKHA200618", dict(AATIF))
+    _read_as(pages[1], skip="declaration")
+    _read_as(pages[2])  # a first page whose ID could not be read
+    _read_as(pages[3], skip="declaration")  # its signature page
+
+    body = _batches(client)
+
+    [doc] = body["batches"][0]["documents"]
+    assert [p["page_id"] for p in doc["pages"]] == [pages[0], pages[1]]
+    assert sorted(p["page_id"] for p in body["unsorted"]) == sorted([pages[2], pages[3]])
+
+
+def test_an_uncoded_form_waits_for_the_page_after_it(client: FlaskClient, uncoded_school: None) -> None:
+    first = _queue(client, "Scan 1.tiff")[0]
+    _queue(client, "Scan 2.tiff")
+    _read_as(first, "AATKHA200618", dict(AATIF))
+
+    [doc] = _batches(client)["batches"][0]["documents"]
+
+    assert doc["status"] == "waiting" and doc["parts"] == 1
+
+
+def test_a_typed_code_takes_a_page_out_of_automatic_pairing(
+    client: FlaskClient, uncoded_school: None
+) -> None:
+    first = _queue(client, "Scan 1.tiff")[0]
+    second = _queue(client, "Scan 2.tiff")[0]
+    _read_as(first, "AATKHA200618", dict(AATIF))
+    _read_as(second, skip="declaration")
+
+    response = client.post(f"/api/pages/{first}/code", json={"code": "B4-2"})
+    assert response.status_code == 200, response.get_json()
+
+    body = _batches(client)
+    keys = sorted(d["key"] for b in body["batches"] for d in b["documents"])
+    assert keys == ["B4-2"]
+    assert [p["page_id"] for p in body["unsorted"]] == [second]
+
+
+def test_uncoded_pages_at_other_schools_stay_unsorted(client: FlaskClient) -> None:
+    first = _queue(client, "Scan 1.tiff")[0]
+    second = _queue(client, "Scan 2.tiff")[0]
+    _read_as(first, "AATKHA200618", dict(AATIF))
+    _read_as(second, skip="declaration")
+
+    body = _batches(client)
+
+    assert body["batches"] == []
+    assert sorted(p["page_id"] for p in body["unsorted"]) == sorted([first, second])
+
+
+def test_two_forms_for_one_student_are_held_for_a_check(client: FlaskClient, uncoded_school: None) -> None:
+    pages = [_queue(client, f"Scan {n}.tiff")[0] for n in range(1, 5)]
+    _read_as(pages[0], "AATKHA200618", dict(AATIF))
+    _read_as(pages[1], skip="declaration")
+    _read_as(pages[2], "AATKHA200618", dict(AATIF))
+    _read_as(pages[3], skip="declaration")
+
+    docs = _batches(client)["batches"][0]["documents"]
+
+    assert [d["status"] for d in docs] == ["needs_attention", "needs_attention"]
+    assert all("same_student" in d["attention"] for d in docs)
+    assert all(d["can_confirm"] for d in docs)
+    assert "B0-2" in docs[0]["message"] and "B0-1" in docs[1]["message"]
+
+
+def test_confirming_an_uncoded_form_files_it_without_the_automatic_code(
+    google: FlaskClient, fake_db: Any, students: Students, drive: FakeDrive, uncoded_school: None
+) -> None:
+    first = _queue(google, "Scan 1.tiff")[0]
+    second = _queue(google, "Scan 2.tiff")[0]
+    _read_as(first, "AATKHA200618", dict(AATIF))
+    _read_as(second, skip="declaration")
+
+    response = _confirm(google, key="B0-1", student_id="AATKHA200618")
+
+    assert response.status_code == 200, response.get_json()
+    body = response.get_json()
+    assert body["uploaded"] is True
+    assert body["document"]["drive_name"] == "Aatif Khan_AATKHA200618.pdf"
+    [pdf_file] = drive.uploaded()
+    with fitz.open(stream=pdf_file["data"], filetype="pdf") as pdf:
+        assert pdf.page_count == 2
+    # Listed as uploaded under "No batch code" afterwards.
+    [batch] = _batches(google)["batches"]
+    assert batch["label"] == "No batch code"
+    assert [d["status"] for d in batch["documents"]] == ["uploaded"]

@@ -319,6 +319,15 @@ FORM_RULE_FINGERPRINTS = {
     },
 }
 
+# Schools whose forms are printed without a written batch code (B1-12).
+# Their pages are paired into forms by scan order instead - see
+# documents._pair_uncoded. Everywhere else a page with no code is left for a
+# person, since there it usually means the code was misread. Comma-separated
+# school_name values as in active_student_data.
+UNCODED_FORM_SCHOOLS = {
+    name.upper() for name in _csv_set(os.getenv("UNCODED_FORM_SCHOOLS", "BOPEMS"))
+}
+
 FORM_TEMPLATE_DIR = DATA_DIR / "forms"
 # A page the layout could not place is skipped as a form's later page only
 # when its whole-page profile (services/page_profile.py) matches a later

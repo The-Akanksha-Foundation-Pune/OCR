@@ -774,6 +774,11 @@ def _looks_like_declaration(image_bgr: np.ndarray) -> bool:
     return False
 
 
+def looks_like_declaration(image_bgr: np.ndarray) -> bool:
+    """Public name for _looks_like_declaration, for the OCR worker."""
+    return _looks_like_declaration(image_bgr)
+
+
 def _looks_like_continuation(image_bgr: np.ndarray) -> bool:
     """
     True when the page is clearly one of a form's later pages: it matches a
