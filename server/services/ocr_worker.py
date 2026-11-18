@@ -316,6 +316,7 @@ def read_ocr(meta: scan_queue.PageMeta) -> scan_queue.PageResult:
         skipped_message = {
             "blank": BLANK_MESSAGE,
             "declaration": "Declaration page, no Student ID.",
+            "continuation": "A later page of a form, no Student ID.",
             "empty_id": "Student ID line is empty.",
         }.get(reason, "This page was skipped.")
         return replace(

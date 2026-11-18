@@ -3003,9 +3003,11 @@
       view.el = el;
       const skipLabel = skipReason === "declaration"
         ? "Declaration page"
-        : skipReason === "empty_id"
-          ? "Empty Student ID"
-          : "Looks blank";
+        : skipReason === "continuation"
+          ? "Later form page"
+          : skipReason === "empty_id"
+            ? "Empty Student ID"
+            : "Looks blank";
 
       const head = make("div", "ocr-doc-head");
       head.appendChild(make("span", "ocr-doc-code", "No code"));

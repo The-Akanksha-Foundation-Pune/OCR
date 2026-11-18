@@ -28,6 +28,14 @@ def _warm() -> None:
         debug_log(f"[WARMUP] RapidOCR failed: {exc}")
 
     try:
+        from server.services import page_profile
+
+        page_profile.warm()
+        debug_log(f"[WARMUP] page templates ready at {time.perf_counter() - started:.1f}s")
+    except Exception as exc:  # noqa: BLE001
+        debug_log(f"[WARMUP] page templates failed: {exc}")
+
+    try:
         from server.services import vision_ocr
 
         if vision_ocr.is_configured():

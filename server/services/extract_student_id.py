@@ -15,11 +15,12 @@ from server.config import (
     BASE_DIR,
     BLANK_ID_INK_RATIO,
     BLANK_PAGE_INK_RATIO,
-    DECLARATION_HEADING_PATH,
+    CONTINUATION_MATCH_MARGIN,
+    CONTINUATION_MATCH_MIN,
+    DECLARATION_HEADINGS,
     DECLARATION_MATCH_MAX_X_FRACTION,
     DECLARATION_MATCH_MIN,
     DECLARATION_PHRASES,
-    DECLARATION_TEMPLATE_PAGE_WIDTH,
     DECLARATION_TOP_FRACTION,
     DECLARATION_WORK_WIDTH,
     FAST_MODE,
@@ -44,6 +45,7 @@ from server.services.field_detector import (
     parse_student_id_from_text,
 )
 from server.services.form_layout import identify_form
+from server.services.page_profile import match_page
 from server.services.handwriting_ocr import (
     id_box_ink_ratio,
     looks_like_student_id,
@@ -130,7 +132,8 @@ class ExtractResult:
     # earlier reading. The scanner page shows it next to the row.
     elapsed_seconds: float = 0.0
     # A page that was never going to carry an ID. skip_reason is "blank",
-    # "declaration", or "empty_id". Not an error, and not sent for lookup.
+    # "declaration", "continuation" or "empty_id". Not an error, and not sent
+    # for lookup.
     skipped: bool = False
     skip_reason: str = ""
 
@@ -510,6 +513,11 @@ def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
             layout = identify_form(straightened)
             if layout is not None:
                 prepared = straightened
+        # No ladder even when straight. A form's later pages land here, and
+        # reading them costs ~11s for an error or a made-up ID. Their whole-
+        # page shape gives them away in ~40 ms.
+        if layout is None and _looks_like_continuation(prepared):
+            return _skipped(source, "continuation", started)
         if layout is None and _strip_says_declaration(prepared):
             return _skipped(source, "declaration", started)
 
@@ -709,23 +717,23 @@ def _skipped(
     )
 
 
-_heading_template: np.ndarray | None = None
-_heading_missing = False
+_headings: list[tuple[np.ndarray, int]] | None = None
 
 
-def _heading_image() -> np.ndarray | None:
-    """The printed 'घोषणा' crop, loaded once. Missing file means no match."""
-    global _heading_template, _heading_missing
-    if _heading_missing:
-        return None
-    if _heading_template is None:
-        image = cv2.imread(str(DECLARATION_HEADING_PATH), cv2.IMREAD_GRAYSCALE)
-        if image is None:
-            _heading_missing = True
-            debug_log(f"[SKIP] declaration heading image missing: {DECLARATION_HEADING_PATH}")
-            return None
-        _heading_template = image
-    return _heading_template
+def _heading_images() -> list[tuple[np.ndarray, int]]:
+    """Each printed back-page heading with its source page width, loaded once.
+    A missing file is logged and left out; the others still match."""
+    global _headings
+    if _headings is None:
+        loaded: list[tuple[np.ndarray, int]] = []
+        for path, page_width in DECLARATION_HEADINGS:
+            image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+            if image is None:
+                debug_log(f"[SKIP] declaration heading image missing: {path}")
+                continue
+            loaded.append((image, page_width))
+        _headings = loaded
+    return _headings
 
 
 def _top_strip(image_bgr: np.ndarray) -> np.ndarray:
@@ -743,24 +751,53 @@ def _top_strip(image_bgr: np.ndarray) -> np.ndarray:
 
 
 def _looks_like_declaration(image_bgr: np.ndarray) -> bool:
-    """True when the printed घोषणा heading sits at the top left."""
-    template = _heading_image()
-    if template is None:
+    """True when a back-page heading (घोषणा, सहमति की पुष्टि) sits at the top left."""
+    headings = _heading_images()
+    if not headings:
         return False
     strip = _top_strip(image_bgr)
     gray = cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY) if strip.ndim == 3 else strip
-    # The strip is at DECLARATION_WORK_WIDTH. The heading image was cut from
-    # a page DECLARATION_TEMPLATE_PAGE_WIDTH wide, so scale it to match.
-    scale = gray.shape[1] / DECLARATION_TEMPLATE_PAGE_WIDTH
-    tw = max(8, int(template.shape[1] * scale))
-    th = max(8, int(template.shape[0] * scale))
-    if th >= gray.shape[0] or tw >= gray.shape[1]:
+    for template, page_width in headings:
+        # The strip is at DECLARATION_WORK_WIDTH. The heading image was cut
+        # from a page page_width wide, so scale it to match.
+        scale = gray.shape[1] / page_width
+        tw = max(8, int(template.shape[1] * scale))
+        th = max(8, int(template.shape[0] * scale))
+        if th >= gray.shape[0] or tw >= gray.shape[1]:
+            continue
+        needle = cv2.resize(template, (tw, th), interpolation=cv2.INTER_AREA)
+        scores = cv2.matchTemplate(gray, needle, cv2.TM_CCOEFF_NORMED)
+        _, best, _, where = cv2.minMaxLoc(scores)
+        left_enough = where[0] <= gray.shape[1] * DECLARATION_MATCH_MAX_X_FRACTION
+        if best >= DECLARATION_MATCH_MIN and left_enough:
+            return True
+    return False
+
+
+def _looks_like_continuation(image_bgr: np.ndarray) -> bool:
+    """
+    True when the page is clearly one of a form's later pages: it matches a
+    later template page well and no first page comes close. Anything less
+    certain is read as normal, so a first page is never dropped here.
+    """
+    try:
+        match = match_page(image_bgr)
+    except Exception as exc:  # noqa: BLE001 - a failed check must not sink the page
+        debug_log(f"[SKIP] page profile failed: {exc}")
         return False
-    needle = cv2.resize(template, (tw, th), interpolation=cv2.INTER_AREA)
-    scores = cv2.matchTemplate(gray, needle, cv2.TM_CCOEFF_NORMED)
-    _, best, _, where = cv2.minMaxLoc(scores)
-    left_enough = where[0] <= gray.shape[1] * DECLARATION_MATCH_MAX_X_FRACTION
-    return best >= DECLARATION_MATCH_MIN and left_enough
+    if match is None:
+        return False
+    verdict = (
+        match.best_is_continuation
+        and match.continuation_score >= CONTINUATION_MATCH_MIN
+        and match.continuation_score - match.first_page_score >= CONTINUATION_MATCH_MARGIN
+    )
+    debug_log(
+        f"[PROFILE] best={match.best_page} score={match.best_score:.3f} "
+        f"first_page={match.first_page_score:.3f} -> "
+        f"{'continuation' if verdict else 'read as normal'}"
+    )
+    return verdict
 
 
 def _strip_says_declaration(image_bgr: np.ndarray) -> bool:

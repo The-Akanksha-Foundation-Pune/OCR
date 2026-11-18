@@ -218,18 +218,26 @@ BLANK_ID_INK_RATIO = float(os.getenv("BLANK_ID_INK_RATIO", "0.02"))
 # A horizontal run this wide, as a fraction of the crop, is the printed rule
 # rather than a letter stroke.
 BLANK_ID_RULE_WIDTH_FRACTION = 0.25
-# Declaration pages ("घोषणा") are recognised from the top of the page only.
-DECLARATION_TOP_FRACTION = 0.15
+# Declaration pages ("घोषणा", or "सहमति की पुष्टि" on the Hindi form) are
+# recognised from the top of the page only. The Hindi heading sits lower than
+# the Marathi one - its bottom edge is at 0.17 of the page on a BOPEMS scan -
+# so the strip reaches past it.
+DECLARATION_TOP_FRACTION = 0.22
 DECLARATION_WORK_WIDTH = 900
 # matchTemplate score and how far from the left edge the heading may sit.
 # On the sample set, declaration pages scored 0.75-0.97 at the left;
 # form pages scored at most 0.62.
 DECLARATION_MATCH_MIN = float(os.getenv("DECLARATION_MATCH_MIN", "0.72"))
 DECLARATION_MATCH_MAX_X_FRACTION = 0.25
-# Width of the page the heading image was cropped from, so a 600 DPI scan
-# and a 200 DPI PDF scale the same template.
-DECLARATION_TEMPLATE_PAGE_WIDTH = 1655
-DECLARATION_HEADING_PATH = DATA_DIR / "labels" / "ghoshana.png"
+# Each heading image with the width of the page it was cropped from, so a
+# 600 DPI scan and a 200 DPI PDF scale the same template.
+#   ghoshana.png          - "घोषणा", the Marathi form's back page
+#   sahmati_ki_pushti.png - "सहमति की पुष्टि", the Hindi form's back page,
+#                           cut from a real BOPEMS scan
+DECLARATION_HEADINGS = (
+    (DATA_DIR / "labels" / "ghoshana.png", 1655),
+    (DATA_DIR / "labels" / "sahmati_ki_pushti.png", 1662),
+)
 # Used only when the heading image does not match and the page has no form
 # ladder. RapidOCR is run on the top strip, never the whole page.
 DECLARATION_PHRASES = (
@@ -310,6 +318,15 @@ FORM_RULE_FINGERPRINTS = {
         "value_height": 0.0200,
     },
 }
+
+FORM_TEMPLATE_DIR = DATA_DIR / "forms"
+# A page the layout could not place is skipped as a form's later page only
+# when its whole-page profile (services/page_profile.py) matches a later
+# template page at least this well, and beats every first page by the margin.
+# Measured: real later pages 0.89-1.00, every first page at most 0.40 against
+# the later templates; a first page scores 0.83-1.00 against its own.
+CONTINUATION_MATCH_MIN = float(os.getenv("CONTINUATION_MATCH_MIN", "0.75"))
+CONTINUATION_MATCH_MARGIN = 0.25
 
 # Pages per printed form, by language — the Student ID is only ever on
 # page 1, so a batch-scanned stack has (pages_per_form - 1) continuation

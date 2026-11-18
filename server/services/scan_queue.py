@@ -168,7 +168,8 @@ class PageResult:
         orientation: 0, or 180 when the page was scanned upside down (page.jpg
             has been turned upright since).
         blank: The page carries almost no ink.
-        skip_reason: blank, declaration, or empty_id when the page was not read.
+        skip_reason: blank, declaration, continuation or empty_id when the page
+            was not read.
         form_language: The form's language, when its layout was recognised.
         confidence: The reader's confidence in the Student ID.
         read_at: When it was read, India time.
