@@ -315,6 +315,8 @@
     <section class="panel results-panel" id="received-panel" aria-labelledby="received-title">
       <div class="section-head">
         <h2 class="section-title" id="received-title">Scanned documents</h2>
+        <button type="button" class="scanner-pill" id="received-clear" hidden
+          title="Hide the files that are finished. Files still being sent or read stay. Nothing is deleted.">Clear list</button>
       </div>
       <p class="section-status" id="received-status" aria-live="polite">Nothing scanned yet on this visit.</p>
       <ol class="received-list" id="received-list" hidden></ol>
@@ -2523,7 +2525,15 @@
     // nothing.
     const receivedList = document.getElementById("received-list");
     const receivedStatus = document.getElementById("received-status");
+    const receivedClear = document.getElementById("received-clear");
     const RECEIVED_ROWS_SHOWN = 200;
+    // Clear list hides what was finished by then - read, failed or not
+    // received - on this computer, and keeps hiding it after a reload. Only
+    // the list: the pages, their OCR results and History are untouched, and
+    // anything still being sent or read stays in view.
+    const RECEIVED_CLEARED_KEY = "ocr.receivedClearedAt";
+    const RECEIVED_IN_PROGRESS = new Set(["sending", "retry", "queued", "reading"]);
+    let receivedClearedAt = Number(recall(RECEIVED_CLEARED_KEY)) || 0;
     const PAGE_STATES = {
       queued: "Waiting for OCR",
       reading: "Reading",
@@ -2578,6 +2588,18 @@
       return "";
     }
 
+    // The server's naive India-time stamp ("2026-11-18T16:19:50") in ms.
+    function stampMs(stamp) {
+      const m = String(stamp || "").match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2})?)/);
+      if (!m) return 0;
+      const ms = Date.parse(`${m[1]}T${m[2].length === 5 ? m[2] + ":00" : m[2]}+05:30`);
+      return Number.isFinite(ms) ? ms : 0;
+    }
+
+    function clearedAway(row) {
+      return Boolean(receivedClearedAt) && !RECEIVED_IN_PROGRESS.has(row.state) && row.at <= receivedClearedAt;
+    }
+
     function receivedRows() {
       const rows = [];
       const shown = new Set();
@@ -2585,6 +2607,7 @@
         if (entry.state !== "sent") {
           rows.push({
             name: entry.name,
+            at: entry.at,
             time: clockTime(entry.at),
             state: entry.state,
             label: SEND_STATES[entry.state] || entry.state,
@@ -2599,6 +2622,7 @@
           const state = known ? known.status : "queued";
           rows.push({
             name: entry.pages.length > 1 ? `${entry.name} - page ${page.source_page || i + 1}` : entry.name,
+            at: entry.at,
             time: clockTime(entry.at),
             state,
             label: PAGE_STATES[state] || state,
@@ -2619,13 +2643,14 @@
           const name = known.name || "Scan";
           rows.push({
             name: perFile.get(known.name) > 1 && known.sourcePage ? `${name} - page ${known.sourcePage}` : name,
+            at: stampMs(known.createdAt),
             time: stampTime(known.createdAt),
             state: known.status,
             label: PAGE_STATES[known.status] || known.status,
             detail: "",
           });
         });
-      return rows;
+      return rows.filter((row) => !clearedAway(row));
     }
 
     function paintReceived() {
@@ -2642,7 +2667,13 @@
       if (counts.failed) bits.push(`${counts.failed} failed`);
       if (counts.retry) bits.push(`${counts.retry} not sent yet`);
       if (counts.error) bits.push(`${counts.error} not received`);
-      const counted = bits.length ? capitalise(bits.join(" · ")) + "." : "Nothing scanned yet on this visit.";
+      const counted = bits.length
+        ? capitalise(bits.join(" · ")) + "."
+        : receivedClearedAt
+          ? "List cleared. New scans will show here."
+          : "Nothing scanned yet on this visit.";
+      // Only worth offering while something finished is on the list.
+      receivedClear.hidden = !rows.some((row) => !RECEIVED_IN_PROGRESS.has(row.state));
       const notice = workerNotice();
       setLine(
         receivedStatus,
@@ -2670,6 +2701,13 @@
       }
       receivedList.hidden = rows.length === 0;
     }
+
+    receivedClear.addEventListener("click", () => {
+      receivedClearedAt = Date.now();
+      remember(RECEIVED_CLEARED_KEY, String(receivedClearedAt));
+      receivedPainted = "";
+      paintReceived();
+    });
 
     // ---- OCR results -------------------------------------------------------------
     // What the server's OCR made of the pages, from /api/batches: documents
