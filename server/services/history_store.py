@@ -643,3 +643,81 @@ def get_not_found(
             return [dict(row) for row in rows], total
     finally:
         conn.close()
+
+
+def scanned_form_links(
+    students: Iterable[dict[str, Any]],
+) -> dict[tuple[str, str], list[dict[str, str]]]:
+    """Every Drive link to a scanned form of these students, newest first.
+
+    For the History page's Scanned list: one query for the whole page of
+    students rather than one per row. A link counts for a student when its
+    log row matched that Student ID and was saved for that student's
+    school - some Student IDs exist at two schools, and a form must never
+    be shown under the other child. A row from before the school was
+    recorded (no school_name) still counts for the ID. The same link logged
+    twice (an upload retried) is listed once, and only https links are
+    kept, so nothing else ends up behind a link on the page.
+
+    Args:
+        students: Rows with student_id and school_name.
+
+    Returns:
+        (STUDENT_ID, SCHOOL NAME) upper-cased -> [{"link", "saved_at"}];
+        a student with no form has no entry.
+    """
+    wanted: dict[str, set[str]] = {}
+    for student in students:
+        sid = str(student.get("student_id") or "").strip().upper()
+        if sid:
+            wanted.setdefault(sid, set()).add(
+                str(student.get("school_name") or "").strip().upper()
+            )
+    if not wanted:
+        return {}
+
+    _ensure_schema()
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            slots = ", ".join(["%s"] * len(wanted))
+            cur.execute(
+                f"""
+                SELECT id, created_at, matched_student_id, school_name,
+                       {DRIVE_LINK_COLUMN} AS link
+                FROM {LOG_TABLE}
+                WHERE found_in_db = 1
+                  AND matched_student_id IN ({slots})
+                  AND {DRIVE_LINK_COLUMN} IS NOT NULL
+                  AND {DRIVE_LINK_COLUMN} <> ''
+                ORDER BY id DESC
+                """,
+                tuple(wanted),
+            )
+            rows = cur.fetchall() or []
+    finally:
+        conn.close()
+
+    found: dict[tuple[str, str], list[dict[str, str]]] = {}
+    seen: dict[tuple[str, str], set[str]] = {}
+    for row in rows:
+        link = str(row.get("link") or "").strip()
+        if not link.lower().startswith("https://"):
+            continue
+        sid = str(row.get("matched_student_id") or "").strip().upper()
+        logged_school = str(row.get("school_name") or "").strip().upper()
+        schools = wanted.get(sid, set())
+        targets = schools if not logged_school else ({logged_school} & schools)
+        created = row.get("created_at")
+        saved_at = (
+            created.isoformat(sep=" ", timespec="seconds")
+            if isinstance(created, datetime)
+            else str(created or "")
+        )
+        for school in targets:
+            key = (sid, school)
+            if link in seen.setdefault(key, set()):
+                continue
+            seen[key].add(link)
+            found.setdefault(key, []).append({"link": link, "saved_at": saved_at})
+    return found

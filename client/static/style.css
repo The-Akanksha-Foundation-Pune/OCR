@@ -1752,6 +1752,36 @@ button:disabled {
   font-weight: 550;
 }
 
+/* History > Scanned: links to each scanned form in Drive. */
+.form-links {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.form-links li + li {
+  margin-top: 0.3rem;
+}
+
+.form-links a {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--accent-dark);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.form-when {
+  display: block;
+  font-size: 0.73rem;
+  color: var(--muted);
+}
+
+.form-missing {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
 .check-note {
   display: block;
   margin-top: 0.22rem;

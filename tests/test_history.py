@@ -1127,3 +1127,111 @@ def test_tab_count_preload_does_not_overwrite_a_newer_search(
     assert result["notFoundCount"] == "12"
     assert "1 total" in result["pageLabel"]
     assert "review=0" in result["preloadUrl"]
+
+
+# ====================================== Scanned list: links to the forms in Drive
+def add_form(
+    conn: sqlite3.Connection,
+    student_id: str,
+    school: str | None,
+    link: str,
+    *,
+    when: str = "2026-10-20 10:00:00",
+    found: bool = True,
+) -> None:
+    attempt = add_log(conn, student_id, found=found, matched=student_id, via="exact", school_name=school)
+    conn.execute(
+        "UPDATE ocr_scan_log SET DrivelinkImage = ?, created_at = ? WHERE id = ?",
+        (link, when, attempt),
+    )
+    conn.commit()
+
+
+def _forms(client: Any, search: str) -> dict[str, Any]:
+    data = client.get(f"/api/scanned?page=1&page_size=25&search={search}").get_json()
+    return {row["student_id"]: row["scanned_forms"] for row in data["items"]}
+
+
+def test_a_search_by_id_lists_every_scanned_form_newest_first(
+    sqlite_db: sqlite3.Connection, client: Any
+) -> None:
+    add_student(sqlite_db, "MOHMEE240916", "BOPEMS", name="Mohammadali Meer")
+    add_form(sqlite_db, "MOHMEE240916", "BOPEMS", "https://drive.google.com/file/d/old", when="2026-10-20 10:00:00")
+    add_form(sqlite_db, "MOHMEE240916", "BOPEMS", "https://drive.google.com/file/d/new", when="2026-11-18 16:00:00")
+    # The same upload logged twice (a retried confirm) is one form.
+    add_form(sqlite_db, "MOHMEE240916", "BOPEMS", "https://drive.google.com/file/d/new", when="2026-11-18 16:01:00")
+
+    forms = _forms(client, "MOHMEE240916")
+
+    assert [f["link"] for f in forms["MOHMEE240916"]] == [
+        "https://drive.google.com/file/d/new",
+        "https://drive.google.com/file/d/old",
+    ]
+    assert forms["MOHMEE240916"][0]["saved_at"].startswith("2026-11-18")
+
+
+def test_a_search_by_name_lists_the_same_forms(sqlite_db: sqlite3.Connection, client: Any) -> None:
+    add_student(sqlite_db, "MOHMEE240916", "BOPEMS", name="Mohammadali Meer")
+    add_form(sqlite_db, "MOHMEE240916", "BOPEMS", "https://drive.google.com/file/d/one")
+
+    forms = _forms(client, "mohammadali")
+
+    assert [f["link"] for f in forms["MOHMEE240916"]] == ["https://drive.google.com/file/d/one"]
+
+
+def test_a_student_with_no_form_in_drive_has_an_empty_list(
+    sqlite_db: sqlite3.Connection, client: Any
+) -> None:
+    add_student(sqlite_db, "NOFORM111111", "BOPEMS")
+    add_log(sqlite_db, "NOFORM111111", found=True, matched="NOFORM111111", via="exact", school_name="BOPEMS")
+
+    assert _forms(client, "NOFORM111111") == {"NOFORM111111": []}
+
+
+def test_a_form_is_listed_only_under_the_child_at_its_school(
+    sqlite_db: sqlite3.Connection, client: Any
+) -> None:
+    # One Student ID, two children at two schools.
+    add_student(sqlite_db, "TWINID111111", "BOPEMS")
+    add_student(sqlite_db, "TWINID111111", "ABMPS")
+    add_form(sqlite_db, "TWINID111111", "BOPEMS", "https://drive.google.com/file/d/bopems")
+    add_form(sqlite_db, "TWINID111111", "ABMPS", "https://drive.google.com/file/d/abmps")
+
+    data = client.get("/api/scanned?page=1&page_size=25&search=TWINID111111").get_json()
+
+    by_school = {row["school_name"]: [f["link"] for f in row["scanned_forms"]] for row in data["items"]}
+    assert by_school == {
+        "BOPEMS": ["https://drive.google.com/file/d/bopems"],
+        "ABMPS": ["https://drive.google.com/file/d/abmps"],
+    }
+
+
+def test_only_https_links_from_found_rows_are_listed(
+    sqlite_db: sqlite3.Connection, client: Any
+) -> None:
+    add_student(sqlite_db, "SAFEID111111", "BOPEMS")
+    add_form(sqlite_db, "SAFEID111111", "BOPEMS", "javascript:alert(1)")
+    add_form(sqlite_db, "SAFEID111111", "BOPEMS", "https://drive.google.com/file/d/notfound", found=False)
+    add_form(sqlite_db, "SAFEID111111", "BOPEMS", "https://drive.google.com/file/d/ok")
+
+    assert [f["link"] for f in _forms(client, "SAFEID111111")["SAFEID111111"]] == [
+        "https://drive.google.com/file/d/ok"
+    ]
+
+
+def test_the_list_still_loads_when_the_links_cannot_be_read(
+    sqlite_db: sqlite3.Connection, client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from server.blueprints import history_routes
+
+    add_student(sqlite_db, "MOHMEE240916", "BOPEMS")
+
+    def broken(_items: Any) -> Any:
+        raise RuntimeError("database went away")
+
+    monkeypatch.setattr(history_routes, "scanned_form_links", broken)
+    response = client.get("/api/scanned?page=1&page_size=25")
+
+    assert response.status_code == 200
+    [row] = response.get_json()["items"]
+    assert row["student_id"] == "MOHMEE240916" and row["scanned_forms"] is None
