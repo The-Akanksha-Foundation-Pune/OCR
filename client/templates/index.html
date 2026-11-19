@@ -331,7 +331,11 @@
     <section class="panel results-panel" id="ocr-panel" aria-labelledby="ocr-title">
       <div class="section-head">
         <h2 class="section-title" id="ocr-title">OCR results</h2>
-        <button type="button" class="scanner-pill" id="ocr-refresh">Refresh</button>
+        <div class="section-actions">
+          <button type="button" class="scanner-pill" id="ocr-clear" hidden
+            title="Hide the uploaded forms. Shown only once every form here is uploaded. Nothing is deleted.">Clear list</button>
+          <button type="button" class="scanner-pill" id="ocr-refresh">Refresh</button>
+        </div>
       </div>
       <p class="section-status" id="ocr-status" aria-live="polite">Loading the OCR results…</p>
       <p class="section-note">
@@ -2724,6 +2728,14 @@
     const ocrUnsorted = document.getElementById("ocr-unsorted");
     const ocrUnsortedList = document.getElementById("ocr-unsorted-list");
     const ocrRefresh = document.getElementById("ocr-refresh");
+    const ocrClear = document.getElementById("ocr-clear");
+    // Clear list hides the forms uploaded by then, on this computer, and
+    // keeps hiding them after a reload. It is offered only once every form
+    // listed is uploaded - nothing to confirm, check, wait for or retry, no
+    // Unsorted page and nothing still being read - so it never hides work.
+    // Only the list: Drive, History and the pages are untouched.
+    const OCR_CLEARED_KEY = "ocr.resultsClearedAt";
+    let ocrClearedAt = Number(recall(OCR_CLEARED_KEY)) || 0;
 
     const results = {
       data: null,           // the last answer from /api/batches
@@ -2914,7 +2926,7 @@
       const liveDocs = new Set();
       const liveBatches = new Set();
       listOf(data.batches).forEach((batch) => {
-        const list = listOf(batch.documents);
+        const list = listOf(batch.documents).filter((doc) => !clearedFromResults(doc));
         if (!list.length) return;
         // Without batch codes the server sends one group with no batch:
         // every document in one list, newest first, under no heading. With
@@ -2959,7 +2971,27 @@
         if (!liveBatches.has(label)) results.batchViews.delete(label);
       });
       paintResultsStatus(data, docs, unsorted.length);
+      const queue = data.queue || {};
+      const reading = (Number(queue.queued) || 0) + (Number(queue.reading) || 0);
+      ocrClear.hidden = !(
+        docs.length > 0 &&
+        unsorted.length === 0 &&
+        reading === 0 &&
+        docs.every((doc) => effectiveStatus(doc) === "uploaded")
+      );
     }
+
+    // An uploaded form confirmed no later than the last Clear list.
+    function clearedFromResults(doc) {
+      if (!ocrClearedAt || effectiveStatus(doc) !== "uploaded") return false;
+      return stampMs(doc.confirmed_at) <= ocrClearedAt;
+    }
+
+    ocrClear.addEventListener("click", () => {
+      ocrClearedAt = Date.now();
+      remember(OCR_CLEARED_KEY, String(ocrClearedAt));
+      paintResults();
+    });
 
     function paintResultsStatus(data, docs, unsortedCount) {
       const counts = {};
@@ -2993,7 +3025,9 @@
         ocrStatus,
         bits.length
           ? capitalise(bits.join(" · ")) + "."
-          : "No documents yet - scanned pages appear here once they are read.",
+          : ocrClearedAt
+            ? "List cleared. New forms will show here once they are read."
+            : "No documents yet - scanned pages appear here once they are read.",
         "section-status"
       );
     }

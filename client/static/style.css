@@ -2483,6 +2483,14 @@ body.is-busy {
   flex-wrap: wrap;
 }
 
+/* Buttons side by side at the right of a section heading. */
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .section-title {
   margin: 0;
   font-size: 1.08rem;
