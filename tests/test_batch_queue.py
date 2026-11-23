@@ -49,6 +49,7 @@ from server.services import (
     documents,
     drive_store,
     ocr_worker,
+    paper_forms,
     scan_queue,
     student_lookup,
 )
@@ -138,6 +139,8 @@ class Readers:
     id_calls: int = 0
     code_rule: Callable[[np.ndarray], str | None] | None = None
     vision_allowed: list[bool] = field(default_factory=list)
+    # The paper form each Student ID read was told (paper_forms).
+    forms: list[str] = field(default_factory=list)
 
 
 @pytest.fixture
@@ -159,8 +162,9 @@ def readers(monkeypatch: pytest.MonkeyPatch) -> Readers:
             code=BatchCode(int(number[1]), int(number[2])), confidence=0.9, raw=text, region="top-right"
         )
 
-    def read_student_id(image_bgr: np.ndarray, source: str) -> ExtractResult:
+    def read_student_id(image_bgr: np.ndarray, source: str, form: str = paper_forms.TWO_SHEET) -> ExtractResult:
         fake.id_calls += 1
+        fake.forms.append(form)
         assert image_bgr.ndim == 3
         student_id = fake.ids.pop(0) if fake.ids else ""
         return ExtractResult(
@@ -665,7 +669,7 @@ def test_a_page_that_keeps_failing_is_marked_failed_after_three_tries(
 ) -> None:
     [page_id] = _queue(client)
 
-    def broken(_image: np.ndarray, _source: str) -> ExtractResult:
+    def broken(_image: np.ndarray, _source: str, form: str = paper_forms.TWO_SHEET) -> ExtractResult:
         raise MemoryError("out of memory")
 
     monkeypatch.setattr(ocr_worker, "read_student_id", broken)

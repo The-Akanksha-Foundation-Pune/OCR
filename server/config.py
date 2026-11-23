@@ -30,9 +30,11 @@ def _env_flag(name: str) -> bool | None:
 
 
 # The scan queue (services/scan_queue.py). Scanning only stores pages here;
-# the OCR worker reads them in the background and a person confirms each
-# document before anything reaches the database or Drive. Plain folders and
-# JSON, no database tables, so a page waiting for OCR survives a restart.
+# the OCR worker reads them in the background and each document is confirmed
+# (by a person, or by the scan page for an exact match with its Upload
+# matched pages automatically switch on) before anything reaches the
+# database or Drive. Plain folders and JSON, no database tables, so a page
+# waiting for OCR survives a restart.
 QUEUE_DIR = _env_path("QUEUE_DIR", DATA_DIR / "queue")
 # Where the OCR worker runs. In development a thread inside the web app
 # reads the queue; unset, that follows Flask's debug mode (on under run.py).
@@ -55,6 +57,61 @@ PAGE_PDF_DPI = 200
 # (about 200 dpi on A4): the layout match and the crops are all fractions of
 # the page, and the full-page passes cost in proportion to its area.
 OCR_MAX_LONG_SIDE = 2400
+# Batch codes ("B1-12", handwritten in each form's corner) gather the pages
+# of one form into one document. Off for now: the corner is not read, and
+# each form is gathered by scan order instead - its Student ID page and the
+# Declaration page scanned straight after it are one document, one Confirm,
+# one PDF. Set BATCH_CODES=1 in .env to bring them back. The rest of the app
+# asks batch_codes_on(), never this name, so a test switches it here alone.
+BATCH_CODES = _env_flag("BATCH_CODES") is True
+
+
+def batch_codes_on() -> bool:
+    """Whether pages are gathered into documents by their batch code."""
+    return BATCH_CODES
+
+
+# Upload matched pages automatically: off unless AUTO_UPLOAD=1. With it off the
+# scan page shows no switch, every document waits for a person to press
+# Confirm, and the server refuses an automatic confirm whatever a page sends.
+# The rest of the app asks auto_upload_on(), never this name.
+AUTO_UPLOAD = _env_flag("AUTO_UPLOAD") is True
+
+
+def auto_upload_on() -> bool:
+    """Whether the scan page may confirm documents by itself (Upload matched pages automatically)."""
+    return AUTO_UPLOAD
+
+
+# With batch codes off, a Declaration page is only paired inside its run: the
+# pages one scan page sent (its sender id), each reaching the server within
+# this many minutes of the one before. A longer pause starts a new run -
+# which is held, like the run before it, when that one is held and it may
+# be the rest of its stack (documents._carry_on).
+RUN_GAP_MINUTES = 10
+# How long a Student ID page with nothing after it yet waits for its
+# Declaration page - the scanner's next file - before a person may confirm
+# it without one. A Declaration page that comes later still joins it, but
+# that form no longer goes up by itself: it was shown without one.
+DECLARATION_WAIT_SECONDS = 120
+# With Upload matched pages automatically on and batch codes off, no form
+# goes up by itself until its whole stack - its run - is finished: its last
+# page reached the server at least this many minutes ago, so a jam or a
+# pause as long as RUN_GAP_MINUTES is waited out (documents._judge_stack).
+# Never less than RUN_GAP_MINUTES: a page that came sooner would still be
+# part of the stack.
+STACK_SETTLE_MINUTES = 10
+# With Upload matched pages automatically on and batch codes off: for how
+# long after a held stack - one with a page out of place - no later stack
+# for its school and city goes up by itself, whichever scan page sends it:
+# the rest of the held one may come after a long break, from the page
+# loaded again or from the other computer (documents._judge_stack). From
+# the held stack's own scan page, that is so however long after. Looked for
+# among the pages the scan page still lists, so DONE_DOCUMENTS_HOURS is
+# best no shorter.
+HELD_STACK_HOURS = 12
+
+
 # Where the handwritten batch code ("B1-12") is written, as fractions
 # (x0, y0, x1, y1) of the upright page: the top-right corner, where the forms
 # carry their circled serial, and the top-left, where some prints put it.
@@ -218,25 +275,54 @@ BLANK_ID_INK_RATIO = float(os.getenv("BLANK_ID_INK_RATIO", "0.02"))
 # A horizontal run this wide, as a fraction of the crop, is the printed rule
 # rather than a letter stroke.
 BLANK_ID_RULE_WIDTH_FRACTION = 0.25
-# Declaration pages ("घोषणा", or "सहमति की पुष्टि" on the Hindi form) are
-# recognised from the top of the page only. The Hindi heading sits lower than
-# the Marathi one - its bottom edge is at 0.17 of the page on a BOPEMS scan -
-# so the strip reaches past it.
-DECLARATION_TOP_FRACTION = 0.22
+# Declaration pages ("घोषणा") of the two-sheet form have the heading at the
+# top of their own sheet, and are recognised from the top of the page.
+DECLARATION_TOP_FRACTION = 0.15
 DECLARATION_WORK_WIDTH = 900
 # matchTemplate score and how far from the left edge the heading may sit.
 # On the sample set, declaration pages scored 0.75-0.97 at the left;
 # form pages scored at most 0.62.
 DECLARATION_MATCH_MIN = float(os.getenv("DECLARATION_MATCH_MIN", "0.72"))
 DECLARATION_MATCH_MAX_X_FRACTION = 0.25
-# Each heading image with the width of the page it was cropped from, so a
-# 600 DPI scan and a 200 DPI PDF scale the same template.
-#   ghoshana.png          - "घोषणा", the Marathi form's back page
-#   sahmati_ki_pushti.png - "सहमति की पुष्टि", the Hindi form's back page,
-#                           cut from a real BOPEMS scan
-DECLARATION_HEADINGS = (
-    (DATA_DIR / "labels" / "ghoshana.png", 1655),
-    (DATA_DIR / "labels" / "sahmati_ki_pushti.png", 1662),
+# The form printed on both sides of one sheet has its "घोषणा" heading part
+# way down the back, at the left margin, so on a page sent as that form
+# (paper_forms) the heading is looked for down the whole left margin as well
+# (as the page came, then turned round), and a page that matches this well
+# is its Declaration side - unless its own layout shows it is a Student ID
+# page (extract_student_id._extract). The
+# page and the heading are both blurred by DECLARATION_SIDE_BLUR (pixels at
+# DECLARATION_WORK_WIDTH) and the heading tried at each of
+# DECLARATION_SIDE_SCALES of its size, the best counting
+# (extract_student_id._heading_match).
+# Measured on real scans of the one-sheet Hindi form, every back and front,
+# as the worker reads them, as scanned (150 dpi grey)
+# and made 100 dpi grey or black and white - a fixed threshold of 96, 128 or
+# 160, Otsu, an adaptive threshold, dithering, a PDF: in every one of those,
+# every back 0.889 and up and every front at most 0.786. This is the middle
+# of that gap. Matched sharp and at the template's size only, backs went as
+# low as 0.691 and fronts as high as 0.687 across those scans.
+DECLARATION_SIDE_MATCH_MIN = float(os.getenv("DECLARATION_SIDE_MATCH_MIN", "0.84"))
+DECLARATION_SIDE_BLUR = 1.0
+DECLARATION_SIDE_SCALES = (0.9, 0.95, 1.0, 1.05, 1.1)
+# Width of the page the heading image was cropped from, so a 600 DPI scan
+# and a 200 DPI PDF scale the same template.
+DECLARATION_TEMPLATE_PAGE_WIDTH = 1655
+DECLARATION_HEADING_PATH = DATA_DIR / "labels" / "ghoshana.png"
+# Other two-sheet back pages, recognised at the top left only, each as
+# (heading image, width of the page it was cut from, how far down the page
+# its heading may reach). Kept apart from the "घोषणा" heading so the
+# one-sheet margin search and DECLARATION_TOP_FRACTION stay as they are.
+#   sahmati_ki_pushti.png - "सहमति की पुष्टि", the back page of the Hindi
+#   form BOPEMS uses, cut from a real BOPEMS scan; its bottom edge sits at
+#   0.17 of the page, below the 0.15 strip above.
+#   ghoshana_mems.png - "घोषणा" as the MEMS Hindi form prints it, in a
+#   smaller, bolder face than ghoshana.png, cut from a real MEMS scan
+#   (Matoshri English Medium School, Nov 2026). Its back page opens with
+#   body text, and the heading's top edge sits at 0.37 of the page, so it
+#   may reach down to 0.50.
+DECLARATION_EXTRA_HEADINGS = (
+    (DATA_DIR / "labels" / "sahmati_ki_pushti.png", 1662, 0.22),
+    (DATA_DIR / "labels" / "ghoshana_mems.png", 1656, 0.50),
 )
 # Used only when the heading image does not match and the page has no form
 # ladder. RapidOCR is run on the top strip, never the whole page.
@@ -287,7 +373,14 @@ TEMPLATE_VALUE_ROIS = {
     "english": (0.200, 0.3041, 0.450, 0.3209),
     "hindi": (0.242, 0.4266, 0.600, 0.4462),
     "marathi": (0.243, 0.4439, 0.601, 0.4635),
+    # The MEMS Hindi form (see FORM_RULE_FINGERPRINTS). Its Student ID
+    # rule is short, and the handwriting runs on well past its end.
+    "hindi_mems": (0.217, 0.346, 0.680, 0.375),
 }
+
+# Form layouts whose labels are printed in Devanagari, so their Student ID
+# may be written in Devanagari too and the Devanagari reader is worth a pass.
+DEVANAGARI_LAYOUTS = ("hindi", "marathi", "hindi_mems")
 
 # Vertical breathing room around the ROI, as a fraction of its height, so
 # handwriting that overshoots the underscore still gets caught. Rows sit
@@ -317,6 +410,21 @@ FORM_RULE_FINGERPRINTS = {
         "student_id_index": 3,
         "value_height": 0.0200,
     },
+    # The two-page Hindi form MEMS (Matoshri English Medium School) prints:
+    # school, student name, class, "विद्यार्थी आईडी", parent name, email,
+    # phone, and the school-name blank in the consent paragraph. Measured
+    # off a real MEMS scan (Nov 2026), where the English ladder fitted only
+    # at a tie with Marathi (0.0037) and the full-page label search then
+    # took the printed "School Index No. 11.15.263" for the Student ID.
+    # Its Student ID rule ends at 0.50 of the width but IDs are written on
+    # past it, to 0.62 and more, so the crop reaches further right
+    # (value_right_reach; 0.010 for the others).
+    "hindi_mems": {
+        "rows": [0.2366, 0.3024, 0.3349, 0.3681, 0.4343, 0.4668, 0.5000, 0.6182],
+        "student_id_index": 3,
+        "value_height": 0.0200,
+        "value_right_reach": 0.18,
+    },
 }
 
 # Schools whose forms are printed without a written batch code (B1-12).
@@ -344,4 +452,5 @@ FORM_PAGE_COUNTS = {
     "english": 2,
     "hindi": 3,
     "marathi": 3,
+    "hindi_mems": 2,
 }

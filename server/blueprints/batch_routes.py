@@ -3,9 +3,21 @@
 Scanning and OCR are separate. POST /api/scans only stores the file's pages
 in the queue and answers 202 straight away; the OCR worker reads them in
 the background; the page polls GET /api/batches to see each page read and
-sorted into documents by its handwritten batch code. Nothing is written to
-the database or Drive until a person presses Confirm on a document - the
-only write path is POST /api/documents/<key>/confirm.
+sorted into documents by its handwritten batch code - or, with batch codes
+off (config.batch_codes_on), each form a document of its own: its Student
+ID page and the Declaration page scanned straight after it, from the same
+scan page (the sender id each scan carries). Nothing is written to the
+database or Drive until a document is confirmed - the only write path is
+POST /api/documents/<key>/confirm. A person presses Confirm, or, with
+Upload matched pages automatically on, the page confirms by itself a
+document the server lists as auto_upload: Ready, its Student ID an exact
+match for a student not yet marked scanned, one school picked - and with
+batch codes off its one Declaration page, recognised by the reader, with
+it, and its whole stack finished, clean and alone
+(documents.auto_upload_refusal, documents._judge_stack). The server alone
+says which and when; the page only asks. It does it because the upload
+goes to the person's own Drive, with the Google sign-in only their session
+holds.
 
 Every route is for the signed-in person's own pages only: another person's
 page is answered exactly as one that does not exist.
@@ -24,7 +36,7 @@ from server.blueprints.ocr_routes import (
     _is_allowed,
     _upload_filename,
 )
-from server.services import documents, ocr_worker, scan_queue
+from server.services import documents, ocr_worker, paper_forms, scan_queue
 from server.services.auth import current_user, require_login
 from server.services.debug_log import debug_log
 from server.services.extract_student_id import LookupUnavailable
@@ -33,6 +45,10 @@ batch_bp = Blueprint("batch", __name__)
 batch_bp.before_request(require_login)
 
 NOT_FOUND = "No such page."
+UNKNOWN_FORM = (
+    "This page sent a form this server does not know. Reload the page, pick the form being scanned,"
+    " and send the scan again."
+)
 # The detail of an unexpected failure (a database error names the host)
 # stays in the server log. Where the document got to shows on the next poll.
 UNEXPECTED = "Something went wrong. Wait for the list to refresh to see whether it was saved."
@@ -46,8 +62,8 @@ def _image_url(page_id: str, size: str) -> str:
     return url_for("batch.page_image", page_id=page_id, size=size)
 
 
-def _error(message: str, status: int) -> ResponseReturnValue:
-    return jsonify({"error": message}), status
+def _error(message: str, status: int, **more: Any) -> ResponseReturnValue:
+    return jsonify({"error": message, **more}), status
 
 
 def _json_body() -> dict[str, Any]:
@@ -71,7 +87,23 @@ def _page_and_document(owner: str, page_id: str) -> dict[str, Any]:
 
 @batch_bp.post("/api/scans")
 def scans_api() -> ResponseReturnValue:
-    """Store a scan's pages in the queue for OCR. Reads nothing: answers 202 at once."""
+    """Store a scan's pages in the queue for OCR. Reads nothing: answers 202 at once.
+
+    The form carries the file, the school and city picked, auto_upload
+    ("1" when the page's Upload matched pages automatically switch is on),
+    form - the paper form picked, "two_sheet" or "one_sheet"
+    (paper_forms) - and, with batch codes off, sender: the id the scan page
+    made for itself when it was loaded, with "-1" after it for a file added
+    by hand. Each page keeps them: only pages sent with the flag may have
+    their document confirmed by the page itself, only pages from one scan
+    page are one stack (documents.auto_upload_refusal, _runs), and the form
+    says how each page is read and paired. A scan with no form - from an
+    older page, or any other client - is the two-sheet form, as every scan
+    was before; one with a form this server does not know is refused (400)
+    with nothing stored: read as either form it would be a guess, and a
+    one-sheet stack read as two sheets has every back read as a page with
+    no Student ID.
+    """
     if "file" not in request.files:
         return _error("Missing file field. Upload as multipart with key 'file'.", 400)
     uploaded = request.files["file"]
@@ -87,6 +119,20 @@ def scans_api() -> ResponseReturnValue:
     source_name = Path(uploaded.filename.replace("\\", "/")).name[:200] or filename
     school = (request.form.get("school") or "").strip()
     location = (request.form.get("location") or "").strip()
+    # Off unless the page says on: an older page, or any other client, sends
+    # nothing, and its pages wait for Confirm as they always did.
+    auto_upload = (request.form.get("auto_upload") or "").strip().lower() in ("1", "true", "yes")
+    # Kept only in the shape the page makes it. None, or anything else, is
+    # kept as none: the pages still pair, by time alone, but never go up by
+    # themselves - and the scan itself is not refused for it.
+    sender = (request.form.get("sender") or "").strip()
+    if sender and not scan_queue.is_sender(sender):
+        debug_log(f"[API] SCANS {source_name!r}: sender {sender[:80]!r} is not a scan page's id; kept as none")
+        sender = ""
+    form = paper_forms.parse(request.form.get("form"))
+    if form is None:
+        debug_log(f"[API] SCANS {source_name!r}: form {str(request.form.get('form'))[:80]!r} is not known; refused")
+        return _error(UNKNOWN_FORM, 400)
     try:
         metas = scan_queue.intake(
             uploaded.read(),
@@ -95,6 +141,9 @@ def scans_api() -> ResponseReturnValue:
             owner_email=_me(),
             school=school,
             location=location,
+            auto_upload=auto_upload,
+            sender=sender,
+            form=form,
         )
     except ValueError as exc:
         return _error(str(exc), 400)
@@ -172,7 +221,10 @@ def page_image(page_id: str) -> ResponseReturnValue:
 
 @batch_bp.post("/api/pages/<page_id>/code")
 def page_code_api(page_id: str) -> ResponseReturnValue:
-    """Set (or with "" clear) a page's batch code by hand; it regroups at once."""
+    """Set (or with "" clear) a page's batch code by hand; it regroups at once.
+
+    409 when batch codes are off: a page then needs only its Student ID.
+    """
     payload = _json_body()
     owner = _me()
     try:
@@ -184,7 +236,12 @@ def page_code_api(page_id: str) -> ResponseReturnValue:
 
 @batch_bp.post("/api/pages/<page_id>/student-id")
 def page_student_id_api(page_id: str) -> ResponseReturnValue:
-    """Set (or with "" clear) a page's Student ID by hand, and look it up read-only."""
+    """Set (or with "" clear) a page's Student ID by hand, and look it up read-only.
+
+    With batch codes off, 409 with nothing kept while a form of the page's
+    stack is being confirmed - by the page itself, say - or when the stack
+    changed meanwhile: a correction is never left behind by a confirm.
+    """
     payload = _json_body()
     owner = _me()
     try:
@@ -196,6 +253,26 @@ def page_student_id_api(page_id: str) -> ResponseReturnValue:
             "The student database could not be reached, so the ID was not kept. Try again.",
             exc.status_code,
         )
+    return jsonify(_page_and_document(owner, page_id)), 200
+
+
+@batch_bp.post("/api/pages/<page_id>/declaration")
+def page_declaration_api(page_id: str) -> ResponseReturnValue:
+    """Attach a page by hand as the Declaration page of the form straight before it.
+
+    The body is {of}: the id of that form's first page, as the page offered
+    it (an Unsorted page's attach_to); "" takes the page off again. 409
+    with nothing saved when batch codes are on, when the page is no longer
+    straight after that form's page with no Declaration page, while a form
+    of its stack is being confirmed, or when the stack changed meanwhile.
+    Such a form never goes up by itself, nor does the rest of its stack.
+    """
+    payload = _json_body()
+    owner = _me()
+    try:
+        documents.set_page_declaration(owner, page_id, str(payload.get("of") or ""), owner)
+    except documents.DocumentError as exc:
+        return _error(exc.message, exc.status_code)
     return jsonify(_page_and_document(owner, page_id)), 200
 
 
@@ -214,14 +291,28 @@ def confirm_document_api(key: str) -> ResponseReturnValue:
     is marked answers 200 with uploaded false and the document left
     "confirmed"; so does a History row that could not be written after the
     upload worked (uploaded true, finished false).
+
+    The page confirming a document by itself adds "automatic": true. That is
+    done only while the document may still go up without a person, for the
+    student it matched exactly; otherwise 409 with nothing saved, and the
+    document waits for someone to press Confirm - or, with "pending": true,
+    it may still go up by itself once its stack has finished, and the page
+    asks again on a later look.
     """
     payload = _json_body()
     owner = _me()
     try:
         outcome = documents.confirm_document(
-            owner, key, str(payload.get("student_id") or ""), owner, payload.get("page_ids")
+            owner,
+            key,
+            str(payload.get("student_id") or ""),
+            owner,
+            payload.get("page_ids"),
+            automatic=payload.get("automatic") is True,
         )
     except documents.DocumentError as exc:
+        if exc.pending:
+            return _error(exc.message, exc.status_code, pending=True)
         return _error(exc.message, exc.status_code)
     except LookupUnavailable as exc:
         return _error(exc.message, exc.status_code)
@@ -230,7 +321,8 @@ def confirm_document_api(key: str) -> ResponseReturnValue:
         return _error(UNEXPECTED, 500)
     debug_log(
         f"[API] DOCUMENT CONFIRM key={key!r} as={outcome.document.key!r} "
-        f"student_id={outcome.document.student_id!r} uploaded={outcome.uploaded}"
+        f"student_id={outcome.document.student_id!r} uploaded={outcome.uploaded} "
+        f"automatic={payload.get('automatic') is True}"
     )
     return jsonify(_outcome_json(outcome)), 200
 

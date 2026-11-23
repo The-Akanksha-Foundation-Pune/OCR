@@ -18,6 +18,7 @@ from server.services.history_store import (
     pending_review,
     resolve_attempt,
     review_token,
+    scanned_form_links,
     schools_holding_student_id,
 )
 from server.services.student_lookup import (
@@ -164,6 +165,22 @@ def scanned_api() -> tuple[Response, int]:
     except Exception as exc:  # noqa: BLE001 — return safe API error
         debug_log(f"[HISTORY] scanned list failed: {exc!r}")
         return jsonify({"error": "Could not load scanned students."}), 500
+
+    # Each student's scanned forms in Drive. Apart from the list, like the
+    # review count: a failure here leaves scanned_forms null ("could not
+    # load") on every row rather than losing the list itself.
+    try:
+        links = scanned_form_links(items)
+        for item in items:
+            key = (
+                str(item.get("student_id") or "").strip().upper(),
+                str(item.get("school_name") or "").strip().upper(),
+            )
+            item["scanned_forms"] = links.get(key, [])
+    except Exception as exc:  # noqa: BLE001 — the list still stands without it
+        debug_log(f"[HISTORY] scanned form links failed: {exc!r}")
+        for item in items:
+            item["scanned_forms"] = None
 
     # How many rows of this whole filtered list - every page, not just
     # this one - still need checking, and a token for exactly which: the

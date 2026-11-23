@@ -17,10 +17,16 @@ from server.config import (
     BLANK_PAGE_INK_RATIO,
     CONTINUATION_MATCH_MARGIN,
     CONTINUATION_MATCH_MIN,
-    DECLARATION_HEADINGS,
+    DECLARATION_EXTRA_HEADINGS,
+    DEVANAGARI_LAYOUTS,
+    DECLARATION_HEADING_PATH,
     DECLARATION_MATCH_MAX_X_FRACTION,
     DECLARATION_MATCH_MIN,
     DECLARATION_PHRASES,
+    DECLARATION_SIDE_BLUR,
+    DECLARATION_SIDE_MATCH_MIN,
+    DECLARATION_SIDE_SCALES,
+    DECLARATION_TEMPLATE_PAGE_WIDTH,
     DECLARATION_TOP_FRACTION,
     DECLARATION_WORK_WIDTH,
     FAST_MODE,
@@ -44,7 +50,7 @@ from server.services.field_detector import (
     iter_template_languages,
     parse_student_id_from_text,
 )
-from server.services.form_layout import identify_form
+from server.services.form_layout import FormMatch, identify_form
 from server.services.page_profile import match_page
 from server.services.handwriting_ocr import (
     id_box_ink_ratio,
@@ -56,6 +62,7 @@ from server.services.handwriting_ocr import (
 from server.services.history_store import log_scan_attempt
 from server.services.id_shape import as_student_id, loggable_reading
 from server.services.id_shape import looks_like_student_id as has_student_id_shape
+from server.services.paper_forms import TWO_SHEET, one_sheet
 from server.services.preprocess import (
     count_pages_from_bytes,
     load_image_from_bytes,
@@ -136,6 +143,15 @@ class ExtractResult:
     # for lookup.
     skipped: bool = False
     skip_reason: str = ""
+    # 180 for a Declaration page whose heading was found only with the page
+    # turned round - a sheet fed upside down - so the scan queue's worker
+    # turns its stored image to match. 0 for every other page. Only the
+    # one-sheet form's pages are looked at turned round (paper_forms).
+    orientation: int = 0
+    # A Declaration page whose heading is part way down it, not at the top:
+    # the back of a form printed on both sides of one sheet, whose front is
+    # its Student ID side. Never on a page read as the two-sheet form.
+    declaration_side: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """The result as API JSON, without anything about the server's internals."""
@@ -318,7 +334,7 @@ def extract_one_image(path, page_number: int, total: int) -> ExtractResult:
     return result
 
 
-def extract_from_image(image_bgr: np.ndarray, source: str) -> ExtractResult:
+def extract_from_image(image_bgr: np.ndarray, source: str, form: str = TWO_SHEET) -> ExtractResult:
     """OCR one page image already in memory, never raising for an unreadable page.
 
     The scan queue's worker reads pages it has stored itself, so there is
@@ -329,12 +345,14 @@ def extract_from_image(image_bgr: np.ndarray, source: str) -> ExtractResult:
     Args:
         image_bgr: The upright page, BGR.
         source: How to name the page in the log and in the result.
+        form: The paper form the page was sent as (paper_forms); the
+            two-sheet form unless it says otherwise.
 
     Returns:
         The reading.
     """
     try:
-        return _extract(image_bgr, source=source)
+        return _extract(image_bgr, source=source, form=form)
     except LookupUnavailable:
         raise
     except ExtractError as exc:
@@ -385,11 +403,19 @@ def confirm_student_id(
     defer_log: bool = False,
     school: str | None = None,
     location: str | None = None,
+    exact_only: bool = False,
+    unscanned_only: bool = False,
 ) -> ExtractResult:
     """
     Final step after the user reviews (and optionally corrects) the OCR
     preview in the UI. Looks up the given Student ID and, if found, marks
     scanned_at — this is the only place scanned_at gets written.
+
+    exact_only: find the student only by this exact ID, never by a
+    repaired near one (find_student_by_id) - for a document the scan page
+    confirms by itself, with nobody looking at the match.
+    unscanned_only: for the same, mark only a student not yet marked
+    scanned; one who is comes back unmarked, with already_scanned set.
 
     Raises ExtractError (400) for something that is not shaped like a
     Student ID, and LookupUnavailable (503) when the database cannot be
@@ -422,7 +448,12 @@ def confirm_student_id(
         message="ok",
     )
     result = _with_db_lookup(
-        result, mark_scanned=True, school=school, location=location
+        result,
+        mark_scanned=True,
+        school=school,
+        location=location,
+        exact_only=exact_only,
+        unscanned_only=unscanned_only,
     )
     if not defer_log:
         _log_confirm_attempt(result, image_link=image_link)
@@ -476,9 +507,14 @@ def _log_confirm_attempt(
         debug_log(f"[HISTORY] failed to log scan attempt: {exc}")
 
 
-def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
+def _extract(image_bgr: np.ndarray, source: str, form: str = TWO_SHEET) -> ExtractResult:
     """Pure OCR — never touches the database. Returns the single best raw
-    reading so the confirmation modal shows exactly what was scanned."""
+    reading so the confirmation modal shows exactly what was scanned.
+
+    `form` is the paper form the page was sent as (paper_forms): only on
+    the one-sheet form is a Declaration side looked for down the margin.
+    Every reader but the scan queue's worker sends none, and reads the
+    two-sheet form."""
     started = time.perf_counter()
     prepared = preprocess_for_ocr(image_bgr)
 
@@ -487,7 +523,33 @@ def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
     # ~27s to conclude what a pixel count answers instantly, and in a
     # 500-form batch those add up to hours.
     if _is_blank_page(prepared):
+        # A signed back page can carry less ink than that (a BOPEMS
+        # "सहमति की पुष्टि" page measured 1.5%). Its heading says what it is,
+        # and it must stay with its form, not be set aside as blank.
+        extra_top = _extra_declaration_top(prepared)
+        if extra_top is not None:
+            return _skipped(
+                source,
+                "declaration",
+                started,
+                declaration_side=one_sheet(form) and extra_top >= DECLARATION_TOP_FRACTION,
+            )
+        if _looks_like_declaration(prepared):
+            return _skipped(source, "declaration", started)
         return _skipped(source, "blank", started)
+
+    # A back page known by one of DECLARATION_EXTRA_HEADINGS. The MEMS Hindi
+    # form prints its "घोषणा" part way down (0.37), and on a page sent as
+    # the one-sheet form a heading that far down marks the sheet's back,
+    # which pairs with its front by place (documents._sheets).
+    extra_top = _extra_declaration_top(prepared)
+    if extra_top is not None:
+        return _skipped(
+            source,
+            "declaration",
+            started,
+            declaration_side=one_sheet(form) and extra_top >= DECLARATION_TOP_FRACTION,
+        )
 
     # "घोषणा" at the top is enough on its own. Declaration pages sometimes
     # still fit a form ladder by accident, and that false match used to send
@@ -513,21 +575,59 @@ def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
             layout = identify_form(straightened)
             if layout is not None:
                 prepared = straightened
-        # No ladder even when straight. A form's later pages land here, and
-        # reading them costs ~11s for an error or a made-up ID. Their whole-
-        # page shape gives them away in ~40 ms.
-        if layout is None and _looks_like_continuation(prepared):
-            return _skipped(source, "continuation", started)
-        if layout is None and _strip_says_declaration(prepared):
-            return _skipped(source, "declaration", started)
 
-    if layout is not None and _id_box_is_empty(prepared, layout):
+    # The form printed on both sides of one sheet has its "घोषणा" heading
+    # part way down the back, which the top-left check above cannot see, and
+    # no ladder. It is looked for down the whole left margin - and with the
+    # page turned round, for a sheet fed upside down - unless the page is a
+    # Student ID page by its own layout: a front is never taken for a back,
+    # whatever its heading score. Only on that form: a two-sheet form's
+    # Declaration page photographed or scanned low in the frame would be
+    # taken for a back, and paired as one (documents._sheets).
+    ink = None if layout is None else _id_box_ink(prepared, layout)
+    if one_sheet(form) and not _is_student_id_page(layout, ink):
+        heading = _find_heading(prepared)
+        if heading is not None:
+            turned, top = heading
+            return _skipped(
+                source,
+                "declaration",
+                started,
+                orientation=turned,
+                declaration_side=top >= DECLARATION_TOP_FRACTION,
+            )
+
+    # A page with no ladder that the heading search did not claim, or - the
+    # two-sheet form - that the top-left check did not. RapidOCR's model
+    # reads Chinese and English, not these Devanagari phrases, so this has
+    # not been seen to find one: the heading checks above are what recognise
+    # Declaration pages. On real scans of the one-sheet form it took no
+    # page - as scanned none reached it; made black and white, the fronts
+    # whose ladder was not found did.
+    # No ladder even when straight, and not a one-sheet back. A form's later
+    # pages land here, and reading them costs ~11s for an error or a made-up
+    # ID. Their whole-page shape gives them away in ~40 ms.
+    if layout is None and _looks_like_continuation(prepared):
+        return _skipped(source, "continuation", started)
+    if layout is None and _strip_says_declaration(prepared):
+        return _skipped(source, "declaration", started)
+
+    # Only a box the ladder has pinned precisely is known to be empty: a
+    # loose match lands it rows away (as for Vision, below), and the page
+    # is read like any other. On real scans upright fronts that fit only
+    # loosely, measured where their box is not, would be skipped unread.
+    if (
+        layout is not None
+        and layout.error <= LAYOUT_TRUST_ERROR
+        and ink is not None
+        and ink < BLANK_ID_INK_RATIO
+    ):
         return _skipped(source, "empty_id", started, layout.language)
     # Whether to spend a Devanagari pass on this page. The layout is the
     # only trustworthy signal here: _score_label calls a bare ID token
     # "english" even on a Hindi form, so the per-candidate language would
     # switch the pass off exactly where it is needed.
-    devanagari_languages = ("hindi", "marathi")
+    devanagari_languages = DEVANAGARI_LAYOUTS
     language_settled = layout is not None and layout.confidence >= LAYOUT_TRUST_CONFIDENCE
     # Whether the rule ladder has pinned the form's lines precisely. The
     # Student ID is on the same rule in every template, so this locates the
@@ -563,7 +663,7 @@ def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
 
         # Keep noisy RapidOCR tokens too — better to show the user a rough
         # reading to correct than nothing at all.
-        if label.parsed_student_id:
+        if label.parsed_student_id and not _is_printed_number(label.text):
             token = re.sub(r"[^A-Za-z0-9]", "", label.parsed_student_id).upper()
             if looks_like_student_id(token):
                 candidates.append((token, 0.92, label.language, f"rapidocr:{label_tag}"))
@@ -667,7 +767,7 @@ def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
                         crop,
                         language,
                         f"template:{language}",
-                        allow_devanagari=language in ("hindi", "marathi"),
+                        allow_devanagari=language in DEVANAGARI_LAYOUTS,
                     )
                 )
             except ValueError:
@@ -700,11 +800,22 @@ def _extract(image_bgr: np.ndarray, source: str) -> ExtractResult:
 
 
 def _skipped(
-    source: str, reason: str, started: float, language: str = "unknown"
+    source: str,
+    reason: str,
+    started: float,
+    language: str = "unknown",
+    *,
+    orientation: int = 0,
+    declaration_side: bool = False,
 ) -> ExtractResult:
     """A page that should not be read. Logged once, and not an error."""
     elapsed = round(time.perf_counter() - started, 2)
-    debug_log(f"[SKIP] {source} {reason} {elapsed:.2f}s")
+    how = ""
+    if declaration_side:
+        how += " side"
+    if orientation:
+        how += f" turned {orientation}"
+    debug_log(f"[SKIP] {source} {reason}{how} {elapsed:.2f}s")
     return ExtractResult(
         student_id="",
         confidence=0.0,
@@ -714,52 +825,104 @@ def _skipped(
         skipped=True,
         skip_reason=reason,
         elapsed_seconds=elapsed,
+        orientation=orientation,
+        declaration_side=declaration_side,
     )
 
 
-_headings: list[tuple[np.ndarray, int]] | None = None
+_heading_template: np.ndarray | None = None
+_heading_missing = False
 
 
-def _heading_images() -> list[tuple[np.ndarray, int]]:
-    """Each printed back-page heading with its source page width, loaded once.
-    A missing file is logged and left out; the others still match."""
-    global _headings
-    if _headings is None:
-        loaded: list[tuple[np.ndarray, int]] = []
-        for path, page_width in DECLARATION_HEADINGS:
-            image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
-            if image is None:
-                debug_log(f"[SKIP] declaration heading image missing: {path}")
-                continue
-            loaded.append((image, page_width))
-        _headings = loaded
-    return _headings
+def _heading_image() -> np.ndarray | None:
+    """The printed 'घोषणा' crop, loaded once. Missing file means no match."""
+    global _heading_template, _heading_missing
+    if _heading_missing:
+        return None
+    if _heading_template is None:
+        image = cv2.imread(str(DECLARATION_HEADING_PATH), cv2.IMREAD_GRAYSCALE)
+        if image is None:
+            _heading_missing = True
+            debug_log(f"[SKIP] declaration heading image missing: {DECLARATION_HEADING_PATH}")
+            return None
+        _heading_template = image
+    return _heading_template
+
+
+def _at_work_width(image: np.ndarray, enlarge: bool = False) -> np.ndarray:
+    """An image narrowed to DECLARATION_WORK_WIDTH, so a heading match stays cheap.
+
+    A narrower one is kept as it is - or, with `enlarge`, widened to it, so
+    the heading is matched at the same size on every scan.
+    """
+    height, width = image.shape[:2]
+    if width == DECLARATION_WORK_WIDTH or (width < DECLARATION_WORK_WIDTH and not enlarge):
+        return image
+    scale = DECLARATION_WORK_WIDTH / width
+    return cv2.resize(
+        image,
+        (DECLARATION_WORK_WIDTH, max(1, int(height * scale))),
+        interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR,
+    )
 
 
 def _top_strip(image_bgr: np.ndarray) -> np.ndarray:
     """Top of the page, narrowed so a heading match stays cheap."""
-    height, width = image_bgr.shape[:2]
-    strip = image_bgr[: max(1, int(height * DECLARATION_TOP_FRACTION))]
-    if width <= DECLARATION_WORK_WIDTH:
-        return strip
-    scale = DECLARATION_WORK_WIDTH / width
-    return cv2.resize(
-        strip,
-        (DECLARATION_WORK_WIDTH, max(1, int(strip.shape[0] * scale))),
-        interpolation=cv2.INTER_AREA,
-    )
+    height = image_bgr.shape[0]
+    return _at_work_width(image_bgr[: max(1, int(height * DECLARATION_TOP_FRACTION))])
 
 
-def _looks_like_declaration(image_bgr: np.ndarray) -> bool:
-    """True when a back-page heading (घोषणा, सहमति की पुष्टि) sits at the top left."""
-    headings = _heading_images()
-    if not headings:
-        return False
-    strip = _top_strip(image_bgr)
-    gray = cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY) if strip.ndim == 3 else strip
-    for template, page_width in headings:
-        # The strip is at DECLARATION_WORK_WIDTH. The heading image was cut
-        # from a page page_width wide, so scale it to match.
+def _heading_needle(width: int, size: float = 1.0) -> np.ndarray | None:
+    """The heading image at the size it has on a page `width` pixels wide, or None without one.
+
+    It was cut from a page DECLARATION_TEMPLATE_PAGE_WIDTH wide, so a
+    600 DPI scan and a 200 DPI PDF scale the same template. `size` makes it
+    that much larger or smaller again, for a heading printed at another size.
+    """
+    template = _heading_image()
+    if template is None:
+        return None
+    scale = width / DECLARATION_TEMPLATE_PAGE_WIDTH * size
+    tw = max(8, int(template.shape[1] * scale))
+    th = max(8, int(template.shape[0] * scale))
+    return cv2.resize(template, (tw, th), interpolation=cv2.INTER_AREA)
+
+
+def looks_like_declaration(image_bgr: np.ndarray) -> bool:
+    """Public name for _looks_like_declaration, for the OCR worker."""
+    return _looks_like_declaration(image_bgr)
+
+
+_extra_headings: list[tuple[np.ndarray, int, float]] | None = None
+
+
+def _extra_heading_images() -> list[tuple[np.ndarray, int, float]]:
+    """DECLARATION_EXTRA_HEADINGS, loaded once. A missing file is logged and left out."""
+    global _extra_headings
+    if _extra_headings is None:
+        loaded: list[tuple[np.ndarray, int, float]] = []
+        for path, page_width, top_fraction in DECLARATION_EXTRA_HEADINGS:
+            image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+            if image is None:
+                debug_log(f"[SKIP] declaration heading image missing: {path}")
+                continue
+            loaded.append((image, page_width, top_fraction))
+        _extra_headings = loaded
+    return _extra_headings
+
+
+def _looks_like_extra_declaration(image_bgr: np.ndarray) -> bool:
+    """True when one of DECLARATION_EXTRA_HEADINGS sits at the top left."""
+    return _extra_declaration_top(image_bgr) is not None
+
+
+def _extra_declaration_top(image_bgr: np.ndarray) -> float | None:
+    """Where one of DECLARATION_EXTRA_HEADINGS sits at the top left, as its
+    top edge's fraction of the page height; None when none does."""
+    height = image_bgr.shape[0]
+    for template, page_width, top_fraction in _extra_heading_images():
+        strip = _at_work_width(image_bgr[: max(1, int(height * top_fraction))])
+        gray = cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY) if strip.ndim == 3 else strip
         scale = gray.shape[1] / page_width
         tw = max(8, int(template.shape[1] * scale))
         th = max(8, int(template.shape[0] * scale))
@@ -768,15 +931,27 @@ def _looks_like_declaration(image_bgr: np.ndarray) -> bool:
         needle = cv2.resize(template, (tw, th), interpolation=cv2.INTER_AREA)
         scores = cv2.matchTemplate(gray, needle, cv2.TM_CCOEFF_NORMED)
         _, best, _, where = cv2.minMaxLoc(scores)
-        left_enough = where[0] <= gray.shape[1] * DECLARATION_MATCH_MAX_X_FRACTION
-        if best >= DECLARATION_MATCH_MIN and left_enough:
-            return True
-    return False
+        if best >= DECLARATION_MATCH_MIN and where[0] <= gray.shape[1] * DECLARATION_MATCH_MAX_X_FRACTION:
+            # The strip is the page's top at work width: back to page units.
+            return where[1] * image_bgr.shape[1] / (gray.shape[1] * max(1, height))
+    return None
 
 
-def looks_like_declaration(image_bgr: np.ndarray) -> bool:
-    """Public name for _looks_like_declaration, for the OCR worker."""
-    return _looks_like_declaration(image_bgr)
+def _looks_like_declaration(image_bgr: np.ndarray) -> bool:
+    """True when the printed घोषणा heading - or one of DECLARATION_EXTRA_HEADINGS,
+    such as the Hindi "सहमति की पुष्टि" - sits at the top left."""
+    if _looks_like_extra_declaration(image_bgr):
+        return True
+    strip = _top_strip(image_bgr)
+    gray = cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY) if strip.ndim == 3 else strip
+    # The strip is at DECLARATION_WORK_WIDTH, and the heading scaled to match.
+    needle = _heading_needle(gray.shape[1])
+    if needle is None or needle.shape[0] >= gray.shape[0] or needle.shape[1] >= gray.shape[1]:
+        return False
+    scores = cv2.matchTemplate(gray, needle, cv2.TM_CCOEFF_NORMED)
+    _, best, _, where = cv2.minMaxLoc(scores)
+    left_enough = where[0] <= gray.shape[1] * DECLARATION_MATCH_MAX_X_FRACTION
+    return best >= DECLARATION_MATCH_MIN and left_enough
 
 
 def _looks_like_continuation(image_bgr: np.ndarray) -> bool:
@@ -805,6 +980,98 @@ def _looks_like_continuation(image_bgr: np.ndarray) -> bool:
     return verdict
 
 
+def _heading_match(gray: np.ndarray) -> tuple[float, float]:
+    """How well the घोषणा heading matches at the page's left margin, anywhere down it, and where.
+
+    As for the top-left check - the page at DECLARATION_WORK_WIDTH, the
+    heading's left edge within DECLARATION_MATCH_MAX_X_FRACTION of the left
+    edge - but down the whole height of the page, with a page narrower than
+    that widened to it, page and heading both a little blurred
+    (DECLARATION_SIDE_BLUR), and the heading tried at each of
+    DECLARATION_SIDE_SCALES of its size, the best counting. Blurred, a
+    black-and-white scan - its strokes thinner or thicker by its threshold,
+    or broken into dots by dithering - matches as its grey scan does; and
+    the one-sheet form's backs print the heading a little smaller than the
+    template.
+
+    Args:
+        gray: The page, greyscale.
+
+    Returns:
+        The best matchTemplate score (TM_CCOEFF_NORMED) and the heading's
+        top edge there, as a fraction of the page height; (0.0, 0.0) when
+        there is no heading image, or no page to match it on.
+    """
+    page = cv2.GaussianBlur(_at_work_width(gray, enlarge=True), (0, 0), DECLARATION_SIDE_BLUR)
+    best, top = 0.0, 0.0
+    for size in DECLARATION_SIDE_SCALES:
+        needle = _heading_needle(page.shape[1], size)
+        if needle is None:
+            return 0.0, 0.0
+        margin = page[:, : int(page.shape[1] * DECLARATION_MATCH_MAX_X_FRACTION) + needle.shape[1]]
+        if needle.shape[0] >= margin.shape[0] or needle.shape[1] >= margin.shape[1]:
+            continue
+        scores = cv2.matchTemplate(
+            margin, cv2.GaussianBlur(needle, (0, 0), DECLARATION_SIDE_BLUR), cv2.TM_CCOEFF_NORMED
+        )
+        _, score, _, where = cv2.minMaxLoc(scores)
+        # A page of one flat colour has nothing to correlate with.
+        if np.isfinite(score) and score > best:
+            best, top = float(score), where[1] / page.shape[0]
+    return best, top
+
+
+def _find_heading(image_bgr: np.ndarray) -> tuple[int, float] | None:
+    """Whether the page shows the घोषणा heading at its left margin, anywhere down it, which way up.
+
+    Looked for as the page came and then, only when that fails, with the
+    page turned round: a sheet fed upside down has its heading at the
+    right, upside down.
+
+    Args:
+        image_bgr: The page.
+
+    Returns:
+        0, or 180 when it matched only turned round, and the heading's top
+        edge as a fraction of the page height that way up; None when it
+        does not match as well as DECLARATION_SIDE_MATCH_MIN either way.
+    """
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY) if image_bgr.ndim == 3 else image_bgr
+    for turned in (0, 180):
+        score, top = _heading_match(gray if turned == 0 else cv2.rotate(gray, cv2.ROTATE_180))
+        # Not [SKIP]: most pages it looks at are read after all; _skipped
+        # says so for the one it finds.
+        debug_log(
+            f"[HEADING] turned {turned}: score={score:.3f} at {top:.2f} "
+            f"threshold={DECLARATION_SIDE_MATCH_MIN}"
+        )
+        if score >= DECLARATION_SIDE_MATCH_MIN:
+            return turned, top
+    return None
+
+
+def _is_student_id_page(layout: FormMatch | None, ink: float | None) -> bool:
+    """Whether a page is a Student ID page by its own layout, whatever the heading search down its margin finds.
+
+    Its rule ladder is pinned precisely (LAYOUT_TRUST_ERROR, as when the
+    layout's crop is trusted) and the Student ID box it locates has
+    handwriting in it. A Declaration side has no such ladder, and a Student
+    ID page must never be taken for one: its Student ID would not be read.
+    (The two-sheet form's top-left check is made before this, as it always
+    was: its Declaration pages can fit a ladder by accident.)
+
+    Args:
+        layout: The page's layout match, or None.
+        ink: The located box's ink (_id_box_ink), or None.
+    """
+    return (
+        layout is not None
+        and layout.error <= LAYOUT_TRUST_ERROR
+        and ink is not None
+        and ink >= BLANK_ID_INK_RATIO
+    )
+
+
 def _strip_says_declaration(image_bgr: np.ndarray) -> bool:
     """RapidOCR on the top strip only, for a page the ladder did not claim.
 
@@ -821,16 +1088,21 @@ def _strip_says_declaration(image_bgr: np.ndarray) -> bool:
     return any(phrase in compact for phrase in DECLARATION_PHRASES)
 
 
-def _id_box_is_empty(image_bgr: np.ndarray, layout) -> bool:
-    """True when the located Student ID box has no handwriting."""
+def _id_box_ink(image_bgr: np.ndarray, layout: FormMatch) -> float | None:
+    """How much handwriting the located Student ID box holds (id_box_ink_ratio).
+
+    Under BLANK_ID_INK_RATIO it is empty. None when the box cannot be
+    cropped, which says nothing either way.
+    """
     try:
         crop = crop_value_roi(image_bgr, layout.student_id_roi)
     except ValueError as exc:
-        debug_log(f"[SKIP] could not crop the ID box: {exc}")
-        return False
+        debug_log(f"[LAYOUT] could not crop the ID box: {exc}")
+        return None
     ratio = id_box_ink_ratio(crop)
-    debug_log(f"[SKIP] id box ink={ratio:.4f} threshold={BLANK_ID_INK_RATIO}")
-    return ratio < BLANK_ID_INK_RATIO
+    # Not [SKIP]: it is looked at on every page with a layout, most of them read.
+    debug_log(f"[LAYOUT] id box ink={ratio:.4f} threshold={BLANK_ID_INK_RATIO}")
+    return ratio
 
 
 def _is_blank_page(image_bgr: np.ndarray) -> bool:
@@ -931,6 +1203,10 @@ def _vision_may_read(crop_bgr: np.ndarray, page_bgr: np.ndarray, tag: str) -> bo
     return True
 
 
+# "Index", "No. 11", or a dotted number such as 11.15.263.
+_PRINTED_NUMBER = re.compile(r"\bindex\b|\bno\s*[.:]\s*\d|\d+\.\d+\.\d+", re.IGNORECASE)
+
+
 def _is_noisy_id_like(token: str) -> bool:
     """Loose shape check so near-miss OCR still reaches DB fuzzy repair."""
     return (
@@ -953,6 +1229,17 @@ def _is_digit_anchored(token: str) -> bool:
     return bool(re.search(r"\d{6}$", token or "")) and any(
         c.isalpha() for c in token
     )
+
+
+def _is_printed_number(text: str) -> bool:
+    """Whether OCR text is a printed reference number, not a handwritten ID.
+
+    The MEMS form prints its school stamp beside the school name: "School
+    Index No. 11.15.263". Read off the page that is "EXNO1115263" - four
+    letters and seven digits, which has a Student ID's shape - and the
+    full-page label search once took it for the Student ID.
+    """
+    return bool(_PRINTED_NUMBER.search(text or ""))
 
 
 def _read_id_from_crop(
@@ -1000,6 +1287,9 @@ def _read_id_from_crop(
             conf = float(item[2])
             if text.strip():
                 rapid_saw_text = True
+            if _is_printed_number(text):
+                debug_log(f"[RapidOCR-crop] printed reference number, not an ID: {loggable_reading(text)}")
+                continue
             parsed = parse_student_id_from_text(text) or re.sub(
                 r"[^A-Za-z0-9]", "", text
             ).upper()
@@ -1031,6 +1321,8 @@ def _read_id_from_crop(
         debug_log("[FAST] RapidOCR saw no text on this crop - skipped EasyOCR")
     elif not (FAST_MODE and have_clean):
         for text, conf in recognize_with_easyocr(crop_bgr):
+            if _is_printed_number(text):
+                continue
             if looks_like_student_id(text):
                 found.append(
                     (text, conf + 0.05, language, f"crop-easyocr:{label_text}")
@@ -1089,12 +1381,16 @@ def _with_db_lookup(
     mark_scanned: bool = False,
     school: str | None = None,
     location: str | None = None,
+    exact_only: bool = False,
+    unscanned_only: bool = False,
 ) -> ExtractResult:
     """Attach active_student_data match for the OCR Student ID.
 
     mark_scanned=False (the default, used during OCR preview) never writes
     scanned_at — only confirm_student_id() does that, once the user has
-    reviewed/corrected the ID in the confirmation modal.
+    reviewed/corrected the ID in the confirmation modal. exact_only=True
+    finds the student only by this exact ID, and unscanned_only=True marks
+    only one not yet marked scanned (find_student_by_id).
 
     Raises LookupUnavailable when the database cannot be asked. Reporting
     that as "not found" is what filed real students' forms as not found.
@@ -1106,6 +1402,8 @@ def _with_db_lookup(
             mark_scanned=mark_scanned,
             school=school,
             location=location,
+            exact_only=exact_only,
+            unscanned_only=unscanned_only,
         )
     except DB_ERRORS as exc:
         # The detail stays in the server log. pymysql's message names the

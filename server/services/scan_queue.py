@@ -2,7 +2,8 @@
 
 Scanning only stores a page here and returns; the OCR worker
 (services/ocr_worker.py) reads it in the background, and nothing reaches the
-database or Drive until a person confirms the document (services/documents.py).
+database or Drive until the document is confirmed (services/documents.py) - by
+a person, or by the scan page for an exact match sent with auto_upload on.
 Everything is plain folders and JSON - no database tables - so a page that
 was waiting survives a restart, and the web app and the watcher process can
 share the queue on one disk.
@@ -15,12 +16,18 @@ share the queue on one disk.
         ocr.json         what OCR read, kept so a lookup retry need not re-read
         result.json      the reading plus the read-only student match
         code.json        a batch code typed by a person (overrides the reading)
-        student_id.json  a Student ID typed by a person (overrides the reading)
+        student_id.json  a Student ID typed by a person (overrides the reading),
+                         kept with who took it back once taken back
+        declaration.json a person's word that the page is the Declaration page
+                         of the form scanned straight before it, kept with who
+                         took it back once taken back
     <QUEUE_DIR>/_pending/<page_id>                waiting for a reader
     <QUEUE_DIR>/_reading/<page_id>.<ms>.<token>   claimed by a reader at <ms>
     <QUEUE_DIR>/_owners/<owner>/open/<page_id>    not yet in a confirmed document
+    <QUEUE_DIR>/_owners/<owner>/storing/<token>   a scan of theirs being stored now,
+                                                  with its sender, school and city
     <QUEUE_DIR>/_owners/<owner>/docs/<key>.json   a confirmed document
-    <QUEUE_DIR>/_owners/<owner>/locks/<code>.lock a confirm in progress
+    <QUEUE_DIR>/_owners/<owner>/locks/<key>.lock  a confirm in progress
     <QUEUE_DIR>/_owners/<owner>/locks/drive-folders.lock
                                                   finding or making Drive folders
     <QUEUE_DIR>/_worker_state.json                what the OCR worker is doing:
@@ -62,6 +69,7 @@ from server.config import (
 )
 from server.services.clock import now_ist
 from server.services.debug_log import debug_log
+from server.services.paper_forms import TWO_SHEET
 from server.services.preprocess import (
     count_pages_from_bytes,
     load_page_grey,
@@ -96,8 +104,13 @@ _LOCK_POLL_SECONDS = 0.05
 _PAGE_ID = re.compile(r"[0-9a-f]{32}")
 _CLAIM_NAME = re.compile(r"(?P<page>[0-9a-f]{32})\.(?P<ms>\d+)\.(?P<token>[0-9a-f]+)")
 # A document key: the code alone while open, the code and a token once
-# confirmed (so the same code written again later is a new document).
-_DOCUMENT_KEY = re.compile(r"B\d{1,3}-\d{1,3}(?:~[0-9a-f]{8})?")
+# confirmed (so the same code written again later is a new document). With
+# batch codes off a document is one form, keyed "P" and its Student ID page's
+# id - which no code can be - with the same token once confirmed.
+_DOCUMENT_KEY = re.compile(r"(?:B\d{1,3}-\d{1,3}|P[0-9a-f]{32})(?:~[0-9a-f]{8})?")
+# A scan page's id for one visit, as the page makes it: 32 hex digits, with
+# "-1" after them on the files added by hand.
+_SENDER = re.compile(r"[0-9a-f]{32}(?:-1)?")
 
 
 class DocumentBusy(RuntimeError):
@@ -124,6 +137,21 @@ class PageMeta:
         original: The name of the stored original ("original.tiff").
         error: Why it failed, once it has.
         updated_at: When this file was last written, India time.
+        auto_upload: Sent with Upload matched pages automatically on, so its
+            document may be confirmed without anyone pressing Confirm
+            (documents.auto_upload_refusal). Off for a page queued before
+            the switch existed: its meta.json has no such key.
+        sender: The id the scan page made for itself when it was loaded,
+            sent with every scan (is_sender), with "-1" after it on the
+            files added by hand: with batch codes off, only pages from one
+            scan page are one stack (documents._runs), and only a form sent
+            the one way may go up by itself. "" for a page sent by an older
+            page or any other client.
+        form: Which paper form the scan page said the page is
+            (paper_forms): TWO_SHEET or ONE_SHEET, and so how it is read and
+            paired. TWO_SHEET - as every page was read before the choice -
+            for a page queued before it existed, whose meta.json has no such
+            key, and for one sent with none.
     """
 
     page_id: str
@@ -141,6 +169,9 @@ class PageMeta:
     original: str = ""
     error: str = ""
     updated_at: str = ""
+    auto_upload: bool = False
+    sender: str = ""
+    form: str = TWO_SHEET
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PageMeta:
@@ -173,6 +204,10 @@ class PageResult:
         form_language: The form's language, when its layout was recognised.
         confidence: The reader's confidence in the Student ID.
         read_at: When it was read, India time.
+        declaration_side: A Declaration page whose heading is part way down
+            it: the back of a form printed on both sides of one sheet
+            (documents._sheets). False for one headed at the top of its own
+            sheet, and for a page read before the reader looked.
     """
 
     code: str | None = None
@@ -190,6 +225,7 @@ class PageResult:
     form_language: str = ""
     confidence: float = 0.0
     read_at: str = ""
+    declaration_side: bool = False
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PageResult:
@@ -207,7 +243,15 @@ class Overrides:
         code_by: Who typed it.
         student_id: A Student ID typed by hand, or None.
         matched_student: The read-only match for that ID, or None.
-        student_id_by: Who typed it.
+        student_id_by: Who typed it - or, with no ID now, who took it back.
+        declaration_of: With batch codes off, the id of the page this one
+            was attached to by hand as its Declaration page, or None.
+        declaration_by: Who attached it - or, with none now, who took it off.
+        declaration_at: When, India time.
+        unreadable: One of the files these are kept in is there but could
+            not be read - a file being replaced, or one a power cut left
+            empty: a person said something about the page that is not known
+            now.
     """
 
     code: str | None = None
@@ -215,6 +259,10 @@ class Overrides:
     student_id: str | None = None
     matched_student: dict[str, Any] | None = None
     student_id_by: str = ""
+    declaration_of: str | None = None
+    declaration_by: str = ""
+    declaration_at: str = ""
+    unreadable: bool = False
 
 
 @dataclass(frozen=True)
@@ -230,6 +278,21 @@ class Claim:
     page_id: str
     marker: Path
     claimed_ms: int
+
+
+@dataclass(frozen=True)
+class Storing:
+    """One of a person's scans being stored right now (storing), as intake was told it.
+
+    Attributes:
+        sender: The scan page that sent it (is_sender), or "" for none.
+        school: The school picked for it, "" for none.
+        location: The city picked for it, "" for none.
+    """
+
+    sender: str
+    school: str
+    location: str
 
 
 @dataclass(frozen=True)
@@ -265,8 +328,18 @@ def is_page_id(text: str | None) -> bool:
 
 
 def is_document_key(text: str | None) -> bool:
-    """Whether `text` is a document key ("B1-12" or "B1-12~1a2b3c4d")."""
+    """Whether `text` is a document key ("B1-12", "P<page id>", either with "~1a2b3c4d")."""
     return bool(text) and bool(_DOCUMENT_KEY.fullmatch(str(text)))
+
+
+def is_sender(text: str | None) -> bool:
+    """Whether `text` is a scan page's id as the page makes it (PageMeta.sender)."""
+    return bool(text) and bool(_SENDER.fullmatch(str(text)))
+
+
+def page_document_key(page_id: str) -> str:
+    """The key of the form a page begins when batch codes are off: "P" and its id."""
+    return f"P{page_id}"
 
 
 def page_dir(page_id: str) -> Path:
@@ -297,11 +370,20 @@ def new_page_id(received_ms: int, index: int) -> str:
 
 
 # ------------------------------------------------------------- JSON on disk
-def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
-    """Write JSON whole to a temporary name, then move it into place."""
+def write_json_atomic(path: Path, data: dict[str, Any], durable: bool = False) -> None:
+    """Write JSON whole to a temporary name, then move it into place.
+
+    durable: flush it to the disk before the move as well, so that a power
+    cut leaves the old file or the new one in place, never an empty one -
+    for what a person typed, which nothing else can tell again.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
-    temporary.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8")
+    with open(temporary, "w", encoding="utf-8") as out:
+        out.write(json.dumps(data, ensure_ascii=False, default=str))
+        if durable:
+            out.flush()
+            os.fsync(out.fileno())
     os.replace(temporary, path)
 
 
@@ -342,6 +424,9 @@ def intake(
     owner_email: str,
     school: str = "",
     location: str = "",
+    auto_upload: bool = False,
+    sender: str = "",
+    form: str = TWO_SHEET,
 ) -> list[PageMeta]:
     """Store an upload in the queue, one queued page per page of the file.
 
@@ -349,7 +434,9 @@ def intake(
     soon as the pages are on disk. Every page is decoded and written to a
     staging folder first and only moved into the queue once the whole file
     has worked, so a damaged page refuses the file without leaving half of
-    it queued.
+    it queued. Its pages are received (received_ns) when it starts and
+    listed only when it ends; in between, the person's storing marker says
+    they are on their way (storing).
 
     Args:
         data: The uploaded file.
@@ -358,6 +445,10 @@ def intake(
         owner_email: The signed-in person.
         school: The school picked on the page.
         location: The city picked on the page.
+        auto_upload: Whether the page's Upload matched pages automatically
+            switch was on when it sent the file.
+        sender: The scan page's id (is_sender), or "" for none.
+        form: The paper form picked on the page (paper_forms).
 
     Returns:
         The queued pages, in page order.
@@ -374,60 +465,67 @@ def intake(
 
     owner = normalise_owner(owner_email)
     suffix = Path(filename).suffix.lower() or ".bin"
-    received_ns = time.time_ns()
-    created = _stamp()
     root = queue_root()
-    staging = root / "_incoming" / secrets.token_hex(8)
-    staging.mkdir(parents=True, exist_ok=True)
     metas: list[PageMeta] = []
-    try:
-        for number in range(1, total + 1):
-            page_id = new_page_id(received_ns // 1_000_000, number)
-            folder = staging / page_id
-            folder.mkdir()
-            page = load_page_grey(
-                data,
-                filename,
-                number,
-                max_dpi=PAGE_MAX_DPI,
-                max_long_side=PAGE_MAX_LONG_SIDE,
-                pdf_dpi=PAGE_PDF_DPI,
-            )
-            original = data if total == 1 else split_original_page(data, filename, number)
-            (folder / f"original{suffix}").write_bytes(original)
-            (folder / PAGE_IMAGE).write_bytes(encode_page(page.image))
-            meta = PageMeta(
-                page_id=page_id,
-                created_at=created,
-                owner_email=owner,
-                school=school,
-                location=location,
-                source_name=source_name,
-                source_page=number,
-                source_pages=total,
-                received_ns=received_ns,
-                dpi=round(page.dpi, 1) if page.dpi else None,
-                original=f"original{suffix}",
-                updated_at=created,
-            )
-            write_json_atomic(folder / "meta.json", asdict(meta))
-            metas.append(meta)
+    # Marked before it is received, and until its pages are listed.
+    with _being_stored(owner, Storing(sender=sender, school=school, location=location)) as marker:
+        received_ns = time.time_ns()
+        created = _stamp()
+        staging = root / "_incoming" / secrets.token_hex(8)
+        staging.mkdir(parents=True, exist_ok=True)
+        try:
+            for number in range(1, total + 1):
+                page_id = new_page_id(received_ns // 1_000_000, number)
+                folder = staging / page_id
+                folder.mkdir()
+                page = load_page_grey(
+                    data,
+                    filename,
+                    number,
+                    max_dpi=PAGE_MAX_DPI,
+                    max_long_side=PAGE_MAX_LONG_SIDE,
+                    pdf_dpi=PAGE_PDF_DPI,
+                )
+                original = data if total == 1 else split_original_page(data, filename, number)
+                (folder / f"original{suffix}").write_bytes(original)
+                (folder / PAGE_IMAGE).write_bytes(encode_page(page.image))
+                meta = PageMeta(
+                    page_id=page_id,
+                    created_at=created,
+                    owner_email=owner,
+                    school=school,
+                    location=location,
+                    source_name=source_name,
+                    source_page=number,
+                    source_pages=total,
+                    received_ns=received_ns,
+                    dpi=round(page.dpi, 1) if page.dpi else None,
+                    original=f"original{suffix}",
+                    updated_at=created,
+                    auto_upload=auto_upload,
+                    sender=sender,
+                    form=form,
+                )
+                write_json_atomic(folder / "meta.json", asdict(meta))
+                metas.append(meta)
+                # Still going, page by page, however big the file.
+                marker.touch()
 
-        index = owner_dir(owner) / "open"
-        index.mkdir(parents=True, exist_ok=True)
-        _pending_dir().mkdir(parents=True, exist_ok=True)
-        _reading_dir().mkdir(parents=True, exist_ok=True)
-        for meta in metas:
-            os.rename(staging / meta.page_id, root / meta.page_id)
-            (index / meta.page_id).touch()
-            # Last: only now may a reader take it.
-            (_pending_dir() / meta.page_id).touch()
-    finally:
-        # Our own staging copy of pages that were refused or already moved.
-        shutil.rmtree(staging, ignore_errors=True)
+            index = owner_dir(owner) / "open"
+            index.mkdir(parents=True, exist_ok=True)
+            _pending_dir().mkdir(parents=True, exist_ok=True)
+            _reading_dir().mkdir(parents=True, exist_ok=True)
+            for meta in metas:
+                os.rename(staging / meta.page_id, root / meta.page_id)
+                (index / meta.page_id).touch()
+                # Last: only now may a reader take it.
+                (_pending_dir() / meta.page_id).touch()
+        finally:
+            # Our own staging copy of pages that were refused or already moved.
+            shutil.rmtree(staging, ignore_errors=True)
     debug_log(
         f"[QUEUE] queued {len(metas)} page(s) from {source_name!r} for {owner!r} "
-        f"school={school!r} location={location!r}"
+        f"school={school!r} location={location!r} auto_upload={auto_upload} sender={sender!r} form={form}"
     )
     return metas
 
@@ -525,17 +623,38 @@ def page_image_path(page_id: str, size: str = "full") -> Path | None:
 
 # ------------------------------------------------------------- overrides
 def load_overrides(page_id: str) -> Overrides:
-    """What a person has typed for a page (empty when nothing)."""
+    """What a person has typed for a page (empty when nothing).
+
+    A file that is there but cannot be read is not taken as nothing typed:
+    Overrides.unreadable says so, and what it held is left out.
+    """
     folder = page_dir(page_id)
-    code = read_json(folder / "code.json") or {}
-    student = read_json(folder / "student_id.json") or {}
+    code, code_lost = _read_override(folder / "code.json")
+    student, student_lost = _read_override(folder / "student_id.json")
+    declaration, declaration_lost = _read_override(folder / "declaration.json")
+    of = declaration.get("of")
     return Overrides(
         code=code.get("code") or None,
         code_by=str(code.get("by") or ""),
         student_id=student.get("student_id") or None,
         matched_student=student.get("matched_student") or None,
         student_id_by=str(student.get("by") or ""),
+        declaration_of=of if is_page_id(of) else None,
+        declaration_by=str(declaration.get("by") or ""),
+        declaration_at=str(declaration.get("at") or ""),
+        unreadable=code_lost or student_lost or declaration_lost,
     )
+
+
+def _read_override(path: Path) -> tuple[dict[str, Any], bool]:
+    """An override file's contents ({} when there is none), and whether it is there but could not be read."""
+    data = read_json(path)
+    if data is not None:
+        return data, False
+    try:
+        return {}, path.exists()
+    except OSError:
+        return {}, True
 
 
 def set_code_override(page_id: str, code: str | None, by: str) -> None:
@@ -549,22 +668,50 @@ def set_code_override(page_id: str, code: str | None, by: str) -> None:
         with contextlib.suppress(FileNotFoundError):
             path.unlink()
         return
-    write_json_atomic(path, {"code": code, "by": by, "at": _stamp()})
+    write_json_atomic(path, {"code": code, "by": by, "at": _stamp()}, durable=True)
 
 
 def set_student_id_override(
     page_id: str, student_id: str | None, matched_student: dict[str, Any] | None, by: str
 ) -> None:
-    """Record (or with None, clear) a Student ID typed for a page, with its match."""
+    """Record (or with None, clear) a Student ID typed for a page, with its match.
+
+    Cleared, the file stays with no ID in it and who took it back: with
+    batch codes off a page a person has corrected never goes up by itself,
+    nor does any form of its stack (documents._judge_stack).
+    """
     path = page_dir(page_id) / "student_id.json"
     if student_id is None:
-        with contextlib.suppress(FileNotFoundError):
-            path.unlink()
+        if path.is_file():
+            write_json_atomic(
+                path, {"student_id": None, "matched_student": None, "by": by, "at": _stamp()}, durable=True
+            )
         return
     write_json_atomic(
         path,
         {"student_id": student_id, "matched_student": matched_student, "by": by, "at": _stamp()},
+        durable=True,
     )
+
+
+def set_declaration_override(page_id: str, of_page_id: str | None, by: str) -> None:
+    """Record (or with None, clear) a person's word that a page is the Declaration page of another.
+
+    Cleared, the file stays with no page in it and who took it off, as for
+    a Student ID taken back (set_student_id_override).
+
+    Args:
+        page_id: The page the reader did not recognise as a Declaration page.
+        of_page_id: The page scanned straight before it, whose form it is
+            the Declaration page of.
+        by: Who said so.
+    """
+    path = page_dir(page_id) / "declaration.json"
+    if of_page_id is None:
+        if path.is_file():
+            write_json_atomic(path, {"of": None, "by": by, "at": _stamp()}, durable=True)
+        return
+    write_json_atomic(path, {"of": of_page_id, "by": by, "at": _stamp()}, durable=True)
 
 
 # ------------------------------------------------------------- claiming
@@ -840,6 +987,69 @@ def close_pages(owner_email: str, page_ids: list[str]) -> None:
             (index / page_id).unlink()
 
 
+@contextlib.contextmanager
+def _being_stored(owner_email: str, scan: Storing) -> Iterator[Path]:
+    """Mark one of a person's scans as being stored while the block runs (storing), yielding the marker.
+
+    The marker says which scan page sent it and for which school and city,
+    so only the stacks it may touch wait for it. It is in place, whole,
+    before the block starts.
+    """
+    folder = owner_dir(owner_email) / "storing"
+    marker = folder / secrets.token_hex(8)
+    write_json_atomic(marker, asdict(scan))
+    try:
+        yield marker
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            marker.unlink()
+
+
+def storing(owner_email: str) -> list[Storing | None]:
+    """The scans of this person's being stored right now: received, their pages not listed yet.
+
+    intake marks a scan before it stamps its pages received and unmarks it
+    only once they are on the open list. So a look that reads the clock,
+    then this, then the open list either sees every page that had arrived by
+    its clock or is told here that one is still on its way - from which scan
+    page, for which school and city; None for one whose marker could not be
+    read, which may be for anything. A marker nobody has touched for
+    QUEUE_CLAIM_STALE_SECONDS was left by a process that died part-way
+    (intake touches it after every page), and is cleared.
+    """
+    folder = owner_dir(owner_email) / "storing"
+    try:
+        entries = list(os.scandir(folder))
+    except FileNotFoundError:
+        return []
+    scans: list[Storing | None] = []
+    for entry in entries:
+        if entry.name.startswith("."):
+            continue  # a marker still being written: its scan is not received yet
+        try:
+            age = time.time() - entry.stat().st_mtime
+        except FileNotFoundError:
+            continue  # stored meanwhile
+        if age >= QUEUE_CLAIM_STALE_SECONDS:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(entry.path)
+            continue
+        data = read_json(Path(entry.path))
+        if data is None:
+            if os.path.exists(entry.path):
+                # There, but not to be read: it may be for anything.
+                scans.append(None)
+            continue  # or stored meanwhile, so listed by now
+        scans.append(
+            Storing(
+                sender=str(data.get("sender") or ""),
+                school=str(data.get("school") or ""),
+                location=str(data.get("location") or ""),
+            )
+        )
+    return scans
+
+
 # ------------------------------------------------------------- confirmed documents
 def document_record_path(owner_email: str, key: str) -> Path:
     """Where a confirmed document's record is kept."""
@@ -873,13 +1083,37 @@ def load_document_records(owner_email: str, since_hours: float | None = None) ->
     Returns:
         The records, newest first.
     """
+    listed, _older = document_records(owner_email, since_hours)
+    return listed
+
+
+def document_records(
+    owner_email: str, since_hours: float | None = None
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """A person's confirmed documents: those to list, and the finished ones from before.
+
+    Every record is read either way, so one read gives both. The listing
+    shows only the first; with batch codes off the pairing needs the pages
+    of every one, however old (documents._pages_beside), or a Declaration
+    page would pair differently once the form before it dropped off the
+    list.
+
+    Args:
+        owner_email: Whose.
+        since_hours: As for load_document_records.
+
+    Returns:
+        The records load_document_records gives, and the finished ones
+        written before `since_hours` - each newest first.
+    """
     folder = owner_dir(owner_email) / "docs"
     try:
         entries = list(os.scandir(folder))
     except FileNotFoundError:
-        return []
+        return [], []
     cutoff = None if since_hours is None else time.time() - since_hours * 3600
-    records: list[tuple[float, dict[str, Any]]] = []
+    listed: list[tuple[float, dict[str, Any]]] = []
+    older: list[tuple[float, dict[str, Any]]] = []
     for entry in entries:
         if not entry.name.endswith(".json") or entry.name.startswith("."):
             continue
@@ -891,10 +1125,12 @@ def load_document_records(owner_email: str, since_hours: float | None = None) ->
         except OSError:
             continue
         if cutoff is not None and modified < cutoff and document_record_finished(record):
-            continue
-        records.append((modified, record))
-    records.sort(key=lambda item: item[0], reverse=True)
-    return [record for _, record in records]
+            older.append((modified, record))
+        else:
+            listed.append((modified, record))
+    listed.sort(key=lambda item: item[0], reverse=True)
+    older.sort(key=lambda item: item[0], reverse=True)
+    return [record for _, record in listed], [record for _, record in older]
 
 
 def document_record_history_pending(record: dict[str, Any]) -> bool:

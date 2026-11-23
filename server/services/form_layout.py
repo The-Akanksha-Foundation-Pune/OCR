@@ -195,7 +195,7 @@ def _roi_from_matched_rule(
     top = max(0.0, y - nominal * 1.10)
     bottom = min(1.0, y + nominal * 0.35)
     left = max(0.0, x0 - 0.010)
-    right = min(1.0, x1 + 0.010)
+    right = min(1.0, x1 + spec.get("value_right_reach", 0.010))
     if right <= left or bottom <= top:
         return None
     return (left, top, right, bottom)

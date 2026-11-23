@@ -2,11 +2,13 @@
 
 Scanning stores pages and returns at once (services/scan_queue.py); this is
 where they are read. For each page it turns the page upright, reads the
-handwritten batch code in its corner, reads the Student ID with the same
-pipeline the scan page always used, and looks the student up - read-only,
-within the page's school or city - so the person checking the document sees
-who it matched. It never writes to the database and never uploads anything:
-that happens only when a person presses Confirm (services/documents.py).
+handwritten batch code in its corner (while batch codes are on), reads the
+Student ID with the same pipeline the scan page always used, and looks the
+student up - read-only, within the page's school or city - so the person
+checking the document sees who it matched. It never writes to the
+database and never uploads anything: that happens only when the document
+is confirmed (services/documents.py) - by a person pressing Confirm, or by
+the scan page itself for an exact match.
 
 Where it runs: in development a daemon thread inside the web app
 (start_in_process_worker, from create_app); in production the inbox
@@ -54,14 +56,16 @@ import numpy as np
 
 from server.config import (
     BLANK_PAGE_INK_RATIO,
+    LAYOUT_TRUST_ERROR,
     OCR_MAX_LONG_SIDE,
     OCR_WORKER_IN_PROCESS,
     PAGE_MAX_DPI,
     PAGE_MAX_LONG_SIDE,
     QUEUE_MAX_ATTEMPTS,
+    batch_codes_on,
 )
 from server.services import scan_queue
-from server.services.batch_code import read_batch_code
+from server.services.batch_code import CodeReading, read_batch_code
 from server.services.clock import now_ist
 from server.services.debug_log import debug_log
 from server.services.extract_student_id import (
@@ -72,6 +76,7 @@ from server.services.extract_student_id import (
 )
 from server.services.form_layout import identify_form
 from server.services.id_shape import is_canonical, looks_like_student_id
+from server.services.paper_forms import one_sheet
 from server.services.preprocess import load_page_grey
 from server.services.student_lookup import DB_ERRORS, probe_database
 
@@ -105,6 +110,7 @@ STATE_REFRESH_SECONDS = 30.0
 STATE_STALE_SECONDS = 120.0
 
 BLANK_MESSAGE = "This page looks blank."
+DECLARATION_MESSAGE = "Declaration page, no Student ID."
 
 # The stale-claim sweep lists _reading/; once a minute is plenty for a
 # claim that is only stale after ten.
@@ -209,7 +215,7 @@ def _process_claim(claim: scan_queue.Claim) -> str:
     debug_log(
         f"[WORKER] {claim.page_id}: code={result.code!r} "
         f"id={'yes' if result.student_id else 'no'} "
-        f"matched={'yes' if result.matched_student else 'no'} orientation={result.orientation}"
+        f"matched={'yes' if result.matched_student else 'no'} orientation={result.orientation} form={meta.form}"
     )
     return READ
 
@@ -267,18 +273,33 @@ def read_ocr(meta: scan_queue.PageMeta) -> scan_queue.PageResult:
     """OCR a page: orientation, batch code and Student ID. No database.
 
     The page is tried both ways up and kept the way its form layout matches
-    better. A page with no layout to match (the signature page) is kept
-    whichever way up its batch code reads; the upside-down try is read by
-    the local recogniser only. An upside-down page has its page.jpg turned
-    round, so the thumbnails and the PDF are upright too.
+    better - for the one-sheet form, turned round only on a close match
+    (_layout_orientation). A page with no layout to match (the signature
+    page) is kept whichever way up its batch code reads; the upside-down try
+    is read by the local recogniser only. A Declaration page whose heading
+    the reader finds only with the page turned round - which it looks for on
+    the one-sheet form only - is turned round too, unless a batch code was
+    read in its corner. An upside-down page has its page.jpg turned round,
+    so the thumbnails and the PDF are upright too. The reader is told the
+    page's form (PageMeta.form, paper_forms).
+
+    With batch codes off (config.batch_codes_on) the code is not read, and
+    a page with no layout to match is kept as it was scanned - but for a
+    Declaration page found turned round.
     """
     grey = scan_queue.load_page_grey_image(meta.page_id)
     if grey is None:
         grey = _normalise_again(meta)
     work = _working_copy(grey)
 
-    angle = _layout_orientation(work)
-    if angle is None:
+    angle = _layout_orientation(work, meta.form)
+    if not batch_codes_on():
+        # No batch codes: the corner is not read at all, here or by Google,
+        # and a page with no layout to match is kept the way it was scanned.
+        code = CodeReading(code=None)
+        if angle is None:
+            angle = 0
+    elif angle is None:
         code = read_code(grey)
         angle = 0
         if code.code is None:
@@ -307,13 +328,11 @@ def read_ocr(meta: scan_queue.PageMeta) -> scan_queue.PageResult:
     if float(np.mean(work < 160)) < BLANK_PAGE_INK_RATIO:
         # A signed back page can carry less ink than the blank threshold
         # (a BOPEMS "सहमति की पुष्टि" page measured 1.5%). Its printed
-        # heading says what it is, and it must stay a part of its form
-        # rather than be set aside as a blank side.
+        # heading says what it is, and it must stay with its form rather
+        # than be set aside as a blank side.
         if looks_like_declaration(cv2.cvtColor(work, cv2.COLOR_GRAY2BGR)):
             return replace(
-                reading,
-                skip_reason="declaration",
-                message="Declaration page, no Student ID.",
+                reading, skip_reason="declaration", message=DECLARATION_MESSAGE, declaration_side=False
             )
         # The reader would only conclude the same, after a costly first pass.
         return replace(reading, blank=True, skip_reason="blank", message=BLANK_MESSAGE)
@@ -321,12 +340,20 @@ def read_ocr(meta: scan_queue.PageMeta) -> scan_queue.PageResult:
     label = meta.source_name or "scan"
     if meta.source_pages > 1:
         label = f"{label} (page {meta.source_page}/{meta.source_pages})"
-    extracted = read_student_id(cv2.cvtColor(work, cv2.COLOR_GRAY2BGR), label)
+    extracted = read_student_id(cv2.cvtColor(work, cv2.COLOR_GRAY2BGR), label, form=meta.form)
     if extracted.skipped:
         reason = extracted.skip_reason or "blank"
+        if reason == "declaration" and extracted.orientation == 180 and code.code is None:
+            # Its heading was found only with the page turned round - a sheet
+            # fed upside down - so page.jpg is turned to match, and its
+            # thumbnails and PDF are upright. A batch code read in its
+            # corner has already said which way up it is.
+            grey = cv2.rotate(grey, cv2.ROTATE_180)
+            scan_queue.replace_page_image(meta.page_id, grey)
+            reading = replace(reading, orientation=(reading.orientation + 180) % 360)
         skipped_message = {
             "blank": BLANK_MESSAGE,
-            "declaration": "Declaration page, no Student ID.",
+            "declaration": DECLARATION_MESSAGE,
             "continuation": "A later page of a form, no Student ID.",
             "empty_id": "Student ID line is empty.",
         }.get(reason, "This page was skipped.")
@@ -336,6 +363,7 @@ def read_ocr(meta: scan_queue.PageMeta) -> scan_queue.PageResult:
             skip_reason=reason,
             message=skipped_message,
             form_language=extracted.form_language,
+            declaration_side=reason == "declaration" and extracted.declaration_side,
         )
     student_id = extracted.student_id if looks_like_student_id(extracted.student_id) else ""
     return replace(
@@ -349,10 +377,25 @@ def read_ocr(meta: scan_queue.PageMeta) -> scan_queue.PageResult:
     )
 
 
-def _layout_orientation(work: np.ndarray) -> int | None:
+def _layout_orientation(work: np.ndarray, form: str) -> int | None:
     """0 or 180, whichever way up the form's ruled layout matches better.
 
-    None when neither does (a page with no Student ID rules on it).
+    None when neither does (a page with no Student ID rules on it) - and,
+    for the one-sheet form (paper_forms), when the better match is turned
+    round but loose, wider than LAYOUT_TRUST_ERROR: an upright page can fit
+    some ladder loosely upside down, often another language's. On real
+    scans of that form some upright fronts did, at 0.0061-0.0065 against
+    0.009-0.010 as they came, and some backs at 0.018 against none: turned
+    round at that word, they would be stored and filed upside down. Such a
+    page is left to its batch code, or with batch codes off kept as it was
+    scanned. The two-sheet form is turned round at any better match, as it
+    always was: on real scans some of its upside-down Student ID pages
+    matched only loosely turned round, and would be left upside down if
+    only a close match turned a page.
+
+    Args:
+        work: The page at the reader's working size, grey.
+        form: The page's paper form (PageMeta.form).
     """
     best: tuple[float, int] | None = None
     for angle in (0, 180):
@@ -360,7 +403,15 @@ def _layout_orientation(work: np.ndarray) -> int | None:
         match = identify(cv2.cvtColor(image, cv2.COLOR_GRAY2BGR))
         if match is not None and (best is None or match.error < best[0]):
             best = (match.error, angle)
-    return None if best is None else best[1]
+    if best is None or (one_sheet(form) and best[1] == 180 and best[0] > LAYOUT_TRUST_ERROR):
+        return None
+    # A page that shows a Declaration heading as it came is upright, however
+    # well some ladder fits it turned round. The MEMS back page has no
+    # ladder upright and fits the English one loosely upside down (0.0155),
+    # and turned round its "घोषणा" heading could no longer be found.
+    if best[1] == 180 and looks_like_declaration(cv2.cvtColor(work, cv2.COLOR_GRAY2BGR)):
+        return None
+    return best[1]
 
 
 def _working_copy(grey: np.ndarray) -> np.ndarray:

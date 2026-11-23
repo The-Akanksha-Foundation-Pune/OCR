@@ -124,6 +124,7 @@
                 <th>Division</th>
                 <th>Check</th>
                 <th>Scanned at (IST)</th>
+                <th>Scanned form</th>
               </tr>
             </thead>
             <tbody id="scanned-body"></tbody>
@@ -462,6 +463,28 @@
             "Mark checked</button>";
         }
 
+        // Every form uploaded for the student, newest first, each opening
+        // its Drive file in a new tab. The server sends only https links.
+        function formsCell(row) {
+          const forms = row.scanned_forms;
+          if (forms === null || forms === undefined) {
+            return '<span class="form-missing">Could not load the link - reload to try again</span>';
+          }
+          if (!forms.length) {
+            return '<span class="form-missing">Scanned form not available</span>';
+          }
+          return '<ul class="form-links">' + forms
+            .map((form, i) => {
+              const label = forms.length > 1 ? `Form ${forms.length - i}` : "Open scanned form";
+              const when = form.saved_at
+                ? `<span class="form-when">${escapeHtml(form.saved_at)}</span>`
+                : "";
+              return `<li><a href="${escapeHtml(form.link)}" target="_blank" rel="noopener noreferrer">` +
+                `${label}</a>${when}</li>`;
+            })
+            .join("") + "</ul>";
+        }
+
         scannedBody.innerHTML = items
           .map(
             (row) => `
@@ -473,6 +496,7 @@
                 <td>${escapeHtml(row.division_name) || "—"}</td>
                 <td>${checkCell(row)}</td>
                 <td>${escapeHtml(row.scanned_at) || "—"}</td>
+                <td>${formsCell(row)}</td>
               </tr>`
           )
           .join("");
