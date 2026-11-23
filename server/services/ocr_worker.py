@@ -404,6 +404,12 @@ def _layout_orientation(work: np.ndarray, form: str) -> int | None:
             best = (match.error, angle)
     if best is None or (one_sheet(form) and best[1] == 180 and best[0] > LAYOUT_TRUST_ERROR):
         return None
+    # A page that shows a Declaration heading as it came is upright, however
+    # well some ladder fits it turned round. The MEMS back page has no
+    # ladder upright and fits the English one loosely upside down (0.0155),
+    # and turned round its "घोषणा" heading could no longer be found.
+    if best[1] == 180 and looks_like_declaration(cv2.cvtColor(work, cv2.COLOR_GRAY2BGR)):
+        return None
     return best[1]
 
 

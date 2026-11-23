@@ -315,8 +315,14 @@ DECLARATION_HEADING_PATH = DATA_DIR / "labels" / "ghoshana.png"
 #   sahmati_ki_pushti.png - "सहमति की पुष्टि", the back page of the Hindi
 #   form BOPEMS uses, cut from a real BOPEMS scan; its bottom edge sits at
 #   0.17 of the page, below the 0.15 strip above.
+#   ghoshana_mems.png - "घोषणा" as the MEMS Hindi form prints it, in a
+#   smaller, bolder face than ghoshana.png, cut from a real MEMS scan
+#   (Matoshri English Medium School, Nov 2026). Its back page opens with
+#   body text, and the heading's top edge sits at 0.37 of the page, so it
+#   may reach down to 0.50.
 DECLARATION_EXTRA_HEADINGS = (
     (DATA_DIR / "labels" / "sahmati_ki_pushti.png", 1662, 0.22),
+    (DATA_DIR / "labels" / "ghoshana_mems.png", 1656, 0.50),
 )
 # Used only when the heading image does not match and the page has no form
 # ladder. RapidOCR is run on the top strip, never the whole page.
@@ -367,7 +373,14 @@ TEMPLATE_VALUE_ROIS = {
     "english": (0.200, 0.3041, 0.450, 0.3209),
     "hindi": (0.242, 0.4266, 0.600, 0.4462),
     "marathi": (0.243, 0.4439, 0.601, 0.4635),
+    # The MEMS Hindi form (see FORM_RULE_FINGERPRINTS). Its Student ID
+    # rule is short, and the handwriting runs on well past its end.
+    "hindi_mems": (0.217, 0.346, 0.680, 0.375),
 }
+
+# Form layouts whose labels are printed in Devanagari, so their Student ID
+# may be written in Devanagari too and the Devanagari reader is worth a pass.
+DEVANAGARI_LAYOUTS = ("hindi", "marathi", "hindi_mems")
 
 # Vertical breathing room around the ROI, as a fraction of its height, so
 # handwriting that overshoots the underscore still gets caught. Rows sit
@@ -397,6 +410,21 @@ FORM_RULE_FINGERPRINTS = {
         "student_id_index": 3,
         "value_height": 0.0200,
     },
+    # The two-page Hindi form MEMS (Matoshri English Medium School) prints:
+    # school, student name, class, "विद्यार्थी आईडी", parent name, email,
+    # phone, and the school-name blank in the consent paragraph. Measured
+    # off a real MEMS scan (Nov 2026), where the English ladder fitted only
+    # at a tie with Marathi (0.0037) and the full-page label search then
+    # took the printed "School Index No. 11.15.263" for the Student ID.
+    # Its Student ID rule ends at 0.50 of the width but IDs are written on
+    # past it, to 0.62 and more, so the crop reaches further right
+    # (value_right_reach; 0.010 for the others).
+    "hindi_mems": {
+        "rows": [0.2366, 0.3024, 0.3349, 0.3681, 0.4343, 0.4668, 0.5000, 0.6182],
+        "student_id_index": 3,
+        "value_height": 0.0200,
+        "value_right_reach": 0.18,
+    },
 }
 
 # Pages per printed form, by language — the Student ID is only ever on
@@ -406,4 +434,5 @@ FORM_PAGE_COUNTS = {
     "english": 2,
     "hindi": 3,
     "marathi": 3,
+    "hindi_mems": 2,
 }

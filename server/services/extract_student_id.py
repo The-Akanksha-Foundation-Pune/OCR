@@ -16,6 +16,7 @@ from server.config import (
     BLANK_ID_INK_RATIO,
     BLANK_PAGE_INK_RATIO,
     DECLARATION_EXTRA_HEADINGS,
+    DEVANAGARI_LAYOUTS,
     DECLARATION_HEADING_PATH,
     DECLARATION_MATCH_MAX_X_FRACTION,
     DECLARATION_MATCH_MIN,
@@ -521,9 +522,30 @@ def _extract(image_bgr: np.ndarray, source: str, form: str = TWO_SHEET) -> Extra
         # A signed back page can carry less ink than that (a BOPEMS
         # "सहमति की पुष्टि" page measured 1.5%). Its heading says what it is,
         # and it must stay with its form, not be set aside as blank.
+        extra_top = _extra_declaration_top(prepared)
+        if extra_top is not None:
+            return _skipped(
+                source,
+                "declaration",
+                started,
+                declaration_side=one_sheet(form) and extra_top >= DECLARATION_TOP_FRACTION,
+            )
         if _looks_like_declaration(prepared):
             return _skipped(source, "declaration", started)
         return _skipped(source, "blank", started)
+
+    # A back page known by one of DECLARATION_EXTRA_HEADINGS. The MEMS Hindi
+    # form prints its "घोषणा" part way down (0.37), and on a page sent as
+    # the one-sheet form a heading that far down marks the sheet's back,
+    # which pairs with its front by place (documents._sheets).
+    extra_top = _extra_declaration_top(prepared)
+    if extra_top is not None:
+        return _skipped(
+            source,
+            "declaration",
+            started,
+            declaration_side=one_sheet(form) and extra_top >= DECLARATION_TOP_FRACTION,
+        )
 
     # "घोषणा" at the top is enough on its own. Declaration pages sometimes
     # still fit a form ladder by accident, and that false match used to send
@@ -596,7 +618,7 @@ def _extract(image_bgr: np.ndarray, source: str, form: str = TWO_SHEET) -> Extra
     # only trustworthy signal here: _score_label calls a bare ID token
     # "english" even on a Hindi form, so the per-candidate language would
     # switch the pass off exactly where it is needed.
-    devanagari_languages = ("hindi", "marathi")
+    devanagari_languages = DEVANAGARI_LAYOUTS
     language_settled = layout is not None and layout.confidence >= LAYOUT_TRUST_CONFIDENCE
     # Whether the rule ladder has pinned the form's lines precisely. The
     # Student ID is on the same rule in every template, so this locates the
@@ -632,7 +654,7 @@ def _extract(image_bgr: np.ndarray, source: str, form: str = TWO_SHEET) -> Extra
 
         # Keep noisy RapidOCR tokens too — better to show the user a rough
         # reading to correct than nothing at all.
-        if label.parsed_student_id:
+        if label.parsed_student_id and not _is_printed_number(label.text):
             token = re.sub(r"[^A-Za-z0-9]", "", label.parsed_student_id).upper()
             if looks_like_student_id(token):
                 candidates.append((token, 0.92, label.language, f"rapidocr:{label_tag}"))
@@ -736,7 +758,7 @@ def _extract(image_bgr: np.ndarray, source: str, form: str = TWO_SHEET) -> Extra
                         crop,
                         language,
                         f"template:{language}",
-                        allow_devanagari=language in ("hindi", "marathi"),
+                        allow_devanagari=language in DEVANAGARI_LAYOUTS,
                     )
                 )
             except ValueError:
@@ -882,6 +904,12 @@ def _extra_heading_images() -> list[tuple[np.ndarray, int, float]]:
 
 def _looks_like_extra_declaration(image_bgr: np.ndarray) -> bool:
     """True when one of DECLARATION_EXTRA_HEADINGS sits at the top left."""
+    return _extra_declaration_top(image_bgr) is not None
+
+
+def _extra_declaration_top(image_bgr: np.ndarray) -> float | None:
+    """Where one of DECLARATION_EXTRA_HEADINGS sits at the top left, as its
+    top edge's fraction of the page height; None when none does."""
     height = image_bgr.shape[0]
     for template, page_width, top_fraction in _extra_heading_images():
         strip = _at_work_width(image_bgr[: max(1, int(height * top_fraction))])
@@ -895,8 +923,9 @@ def _looks_like_extra_declaration(image_bgr: np.ndarray) -> bool:
         scores = cv2.matchTemplate(gray, needle, cv2.TM_CCOEFF_NORMED)
         _, best, _, where = cv2.minMaxLoc(scores)
         if best >= DECLARATION_MATCH_MIN and where[0] <= gray.shape[1] * DECLARATION_MATCH_MAX_X_FRACTION:
-            return True
-    return False
+            # The strip is the page's top at work width: back to page units.
+            return where[1] * image_bgr.shape[1] / (gray.shape[1] * max(1, height))
+    return None
 
 
 def _looks_like_declaration(image_bgr: np.ndarray) -> bool:
@@ -1139,6 +1168,10 @@ def _vision_may_read(crop_bgr: np.ndarray, page_bgr: np.ndarray, tag: str) -> bo
     return True
 
 
+# "Index", "No. 11", or a dotted number such as 11.15.263.
+_PRINTED_NUMBER = re.compile(r"\bindex\b|\bno\s*[.:]\s*\d|\d+\.\d+\.\d+", re.IGNORECASE)
+
+
 def _is_noisy_id_like(token: str) -> bool:
     """Loose shape check so near-miss OCR still reaches DB fuzzy repair."""
     return (
@@ -1161,6 +1194,17 @@ def _is_digit_anchored(token: str) -> bool:
     return bool(re.search(r"\d{6}$", token or "")) and any(
         c.isalpha() for c in token
     )
+
+
+def _is_printed_number(text: str) -> bool:
+    """Whether OCR text is a printed reference number, not a handwritten ID.
+
+    The MEMS form prints its school stamp beside the school name: "School
+    Index No. 11.15.263". Read off the page that is "EXNO1115263" - four
+    letters and seven digits, which has a Student ID's shape - and the
+    full-page label search once took it for the Student ID.
+    """
+    return bool(_PRINTED_NUMBER.search(text or ""))
 
 
 def _read_id_from_crop(
@@ -1208,6 +1252,9 @@ def _read_id_from_crop(
             conf = float(item[2])
             if text.strip():
                 rapid_saw_text = True
+            if _is_printed_number(text):
+                debug_log(f"[RapidOCR-crop] printed reference number, not an ID: {loggable_reading(text)}")
+                continue
             parsed = parse_student_id_from_text(text) or re.sub(
                 r"[^A-Za-z0-9]", "", text
             ).upper()
@@ -1239,6 +1286,8 @@ def _read_id_from_crop(
         debug_log("[FAST] RapidOCR saw no text on this crop - skipped EasyOCR")
     elif not (FAST_MODE and have_clean):
         for text, conf in recognize_with_easyocr(crop_bgr):
+            if _is_printed_number(text):
+                continue
             if looks_like_student_id(text):
                 found.append(
                     (text, conf + 0.05, language, f"crop-easyocr:{label_text}")
