@@ -334,6 +334,8 @@ DECLARATION_EXTRA_HEADINGS = (
     (DATA_DIR / "labels" / "ghoshana_mems.png", 1656, 0.50),
     (DATA_DIR / "labels" / "palakanchi_swakshari.png", 1666, 0.35),
     (DATA_DIR / "labels" / "palakanchi_swakshari_2.png", 1658, 0.35),
+    # The second MEMS Hindi print sets its घोषणा a size smaller.
+    (DATA_DIR / "labels" / "ghoshana_mems_2.png", 1659, 0.50),
 )
 # Used only when the heading image does not match and the page has no form
 # ladder. RapidOCR is run on the top strip, never the whole page.
@@ -387,11 +389,14 @@ TEMPLATE_VALUE_ROIS = {
     # The MEMS Hindi form (see FORM_RULE_FINGERPRINTS). Its Student ID
     # rule is short, and the handwriting runs on well past its end.
     "hindi_mems": (0.217, 0.346, 0.680, 0.375),
+    # The second MEMS Hindi print (Nov 2026): all eight fields in one tight
+    # block at the top, the Student ID on the 4th rule.
+    "hindi_mems_2": (0.237, 0.247, 0.620, 0.272),
 }
 
 # Form layouts whose labels are printed in Devanagari, so their Student ID
 # may be written in Devanagari too and the Devanagari reader is worth a pass.
-DEVANAGARI_LAYOUTS = ("hindi", "marathi", "hindi_mems")
+DEVANAGARI_LAYOUTS = ("hindi", "marathi", "hindi_mems", "hindi_mems_2")
 
 # Vertical breathing room around the ROI, as a fraction of its height, so
 # handwriting that overshoots the underscore still gets caught. Rows sit
@@ -436,6 +441,15 @@ FORM_RULE_FINGERPRINTS = {
         "value_height": 0.0200,
         "value_right_reach": 0.18,
     },
+    # The second MEMS Hindi print: the seven fill-in rules sit only ~0.02 of
+    # the page apart (school, student, class, Student ID, parent, e-mail,
+    # phone), then the school-name blank in the consent paragraph. Measured
+    # off a Nov 2026 scan, as there is no blank template.
+    "hindi_mems_2": {
+        "rows": [0.2039, 0.2244, 0.2453, 0.2658, 0.3081, 0.3286, 0.3497, 0.4951],
+        "student_id_index": 3,
+        "value_height": 0.0160,
+    },
 }
 
 # Schools whose forms are printed without a written batch code (B1-12).
@@ -464,4 +478,5 @@ FORM_PAGE_COUNTS = {
     "hindi": 3,
     "marathi": 3,
     "hindi_mems": 2,
+    "hindi_mems_2": 2,
 }

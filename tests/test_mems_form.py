@@ -197,3 +197,78 @@ def test_the_marathi_back_page_from_the_other_print_run_is_a_declaration() -> No
     result = extract._extract(_marathi_back(label_top=0.19, print_run=3), "back.jpg", TWO_SHEET)
 
     assert result.skipped and result.skip_reason == "declaration"
+
+
+# The second MEMS Hindi print (Nov 2026): all eight fields in one tight block.
+_PAGE_2 = (2342, 1659)
+_RULE_X_2 = [
+    (0.268, 0.609), (0.260, 0.602), (0.168, 0.510), (0.247, 0.590),
+    (0.276, 0.617), (0.213, 0.556), (0.213, 0.555), (0.129, 0.409),
+]
+
+
+def _front_2(id_ink: bool = True) -> np.ndarray:
+    """A white page with the second print's rules, and handwriting on its Student ID rule."""
+    page = np.full((*_PAGE_2, 3), 255, np.uint8)
+    height, width = _PAGE_2
+    rows = FORM_RULE_FINGERPRINTS["hindi_mems_2"]["rows"]
+    for y, (x0, x1) in zip(rows, _RULE_X_2):
+        row = int(y * height)
+        page[row : row + 3, int(x0 * width) : int(x1 * width)] = 0
+    if id_ink:
+        row = int(rows[3] * height)
+        for x in range(int(0.32 * width), int(0.55 * width), 30):
+            page[row - 30 : row - 4, x : x + 6] = 0
+    return page
+
+
+def _mems_heading_2() -> np.ndarray:
+    path = next(p for p, _, _ in DECLARATION_EXTRA_HEADINGS if p.name == "ghoshana_mems_2.png")
+    heading = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    assert heading is not None
+    return cv2.cvtColor(heading, cv2.COLOR_GRAY2BGR)
+
+
+def _paste_heading_2(page: np.ndarray, top: float) -> np.ndarray:
+    heading = _mems_heading_2()
+    y, x = int(page.shape[0] * top), int(page.shape[1] * 0.12)
+    page[y : y + heading.shape[0], x : x + heading.shape[1]] = heading
+    return page
+
+
+def _back_2() -> np.ndarray:
+    page = np.full((*_PAGE_2, 3), 255, np.uint8)
+    page[200:1200:40, 180:1500] = 0
+    return _paste_heading_2(page, 0.373)
+
+
+def test_the_second_mems_print_is_recognised_by_its_own_ladder() -> None:
+    layout = identify_form(_front_2())
+
+    assert layout is not None
+    assert layout.language == "hindi_mems_2"
+    left, top, right, bottom = layout.student_id_roi
+    # On the Student ID rule (0.266), below the class rule (0.245) and
+    # above the parent's name (0.308) - not the school address beside it.
+    assert 0.2453 < top < 0.2658 < bottom < 0.28
+    assert left < 0.247 and right >= 0.59
+
+
+def test_the_second_mems_back_is_a_declaration_page() -> None:
+    two = extract.extract_from_image(_back_2(), "back", TWO_SHEET)
+    one = extract.extract_from_image(_back_2(), "back", ONE_SHEET)
+
+    assert two.skip_reason == "declaration" and not two.declaration_side
+    assert one.skip_reason == "declaration" and one.declaration_side
+
+
+def test_a_front_is_never_taken_for_a_back_by_a_heading_part_way_down() -> None:
+    # The smaller घोषणा scores up to 0.69 on real fronts; were one ever to
+    # pass, the page's own ladder and handwritten ID keep it a front.
+    front = _paste_heading_2(_front_2(), 0.40)
+    assert extract._extra_declaration_top(front) is not None
+
+    assert extract._front_despite_heading(front, 0.40)
+    assert not extract._front_despite_heading(_back_2(), 0.373)
+    # A heading at the very top is trusted as before.
+    assert not extract._front_despite_heading(front, 0.05)

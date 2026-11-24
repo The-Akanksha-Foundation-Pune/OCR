@@ -543,7 +543,7 @@ def _extract(image_bgr: np.ndarray, source: str, form: str = TWO_SHEET) -> Extra
     # the one-sheet form a heading that far down marks the sheet's back,
     # which pairs with its front by place (documents._sheets).
     extra_top = _extra_declaration_top(prepared)
-    if extra_top is not None:
+    if extra_top is not None and not _front_despite_heading(prepared, extra_top):
         return _skipped(
             source,
             "declaration",
@@ -1070,6 +1070,25 @@ def _is_student_id_page(layout: FormMatch | None, ink: float | None) -> bool:
         and ink is not None
         and ink >= BLANK_ID_INK_RATIO
     )
+
+
+def _front_despite_heading(image_bgr: np.ndarray, heading_top: float) -> bool:
+    """Whether a page whose heading was found part way down is a Student ID page all the same.
+
+    A heading matched part way down sits where a front page has its fields,
+    and the smaller-print MEMS घोषणा scores up to 0.69 there against the
+    0.72 bar. A page whose own ladder pins a Student ID box with handwriting
+    in it keeps being read; a heading at the very top is trusted as before.
+
+    Args:
+        image_bgr: The prepared page.
+        heading_top: The heading's top, as a fraction of the page height.
+    """
+    if heading_top < DECLARATION_TOP_FRACTION:
+        return False
+    layout = identify_form(image_bgr)
+    ink = None if layout is None else _id_box_ink(image_bgr, layout)
+    return _is_student_id_page(layout, ink)
 
 
 def _strip_says_declaration(image_bgr: np.ndarray) -> bool:
