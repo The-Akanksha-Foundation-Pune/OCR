@@ -135,10 +135,13 @@ def test_the_worker_never_turns_round_a_page_that_shows_its_heading_upright(monk
 
 
 # ------------------------------------------------- the MEMS Marathi form
-def _marathi_back(label_top: float = 0.21) -> np.ndarray:
-    """A white page with the "पालकांची स्वाक्षरी:" label at the left margin and almost no other ink."""
-    path, _, _ = DECLARATION_EXTRA_HEADINGS[2]
-    assert path.name == "palakanchi_swakshari.png"
+def _marathi_back(label_top: float = 0.21, print_run: int = 2) -> np.ndarray:
+    """A white page with the "पालकांची स्वाक्षरी:" label at the left margin and almost no other ink.
+
+    print_run 3 is the label from a second MEMS print run, printed larger.
+    """
+    path, _, _ = DECLARATION_EXTRA_HEADINGS[print_run]
+    assert path.name.startswith("palakanchi_swakshari")
     label = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
     assert label is not None
     page = np.full((2339, 1666, 3), 255, np.uint8)
@@ -188,3 +191,9 @@ def test_ink_after_a_wide_gap_is_not_taken_in() -> None:
     page[1050:1090, 1094:1200] = 0
 
     assert _follow_ink_right(page, (0.24, 0.445, 0.60, 0.472))[2] == 0.60
+
+
+def test_the_marathi_back_page_from_the_other_print_run_is_a_declaration() -> None:
+    result = extract._extract(_marathi_back(label_top=0.19, print_run=3), "back.jpg", TWO_SHEET)
+
+    assert result.skipped and result.skip_reason == "declaration"
