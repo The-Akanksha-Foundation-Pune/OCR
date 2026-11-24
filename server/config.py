@@ -320,9 +320,15 @@ DECLARATION_HEADING_PATH = DATA_DIR / "labels" / "ghoshana.png"
 #   (Matoshri English Medium School, Nov 2026). Its back page opens with
 #   body text, and the heading's top edge sits at 0.37 of the page, so it
 #   may reach down to 0.50.
+#   palakanchi_swakshari.png - "पालकांची स्वाक्षरी:" (parent's signature), the
+#   label that opens the signature block on the back of the MEMS Marathi
+#   form, which has no heading at all: the consent tick-boxes, then this
+#   label with its top edge at 0.21. Signed, the page carries under 2% ink
+#   and was set aside as blank. Cut from a real MEMS scan (Nov 2026).
 DECLARATION_EXTRA_HEADINGS = (
     (DATA_DIR / "labels" / "sahmati_ki_pushti.png", 1662, 0.22),
     (DATA_DIR / "labels" / "ghoshana_mems.png", 1656, 0.50),
+    (DATA_DIR / "labels" / "palakanchi_swakshari.png", 1666, 0.35),
 )
 # Used only when the heading image does not match and the page has no form
 # ladder. RapidOCR is run on the top strip, never the whole page.

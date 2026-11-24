@@ -150,9 +150,10 @@ def identify_form(image_bgr: np.ndarray) -> FormMatch | None:
         return None
 
     spec = FORM_RULE_FINGERPRINTS[language]
-    roi = _roi_from_matched_rule(rows, spec, scale, offset) or TEMPLATE_VALUE_ROIS[
-        language
-    ]
+    pinned = _roi_from_matched_rule(rows, spec, scale, offset)
+    # Only a box on a rule the scan shows is followed past its end: a fixed
+    # template box may sit on a line of printed text.
+    roi = _follow_ink_right(image_bgr, pinned) if pinned else TEMPLATE_VALUE_ROIS[language]
 
     # Clear separation from the runner-up means a confident language call.
     margin = (runner_up - error) / max(runner_up, 1e-6)
@@ -171,6 +172,54 @@ def identify_form(image_bgr: np.ndarray) -> FormMatch | None:
         source="rules",
         runner_up_language=runner_up_language,
     )
+
+
+# Handwriting that runs on past the printed rule is followed until a gap at
+# least this wide (a fraction of the page width) - wider than the space
+# between two written characters - or the page's right margin.
+INK_FOLLOW_GAP = 0.03
+INK_FOLLOW_LIMIT = 0.97
+# A column counts as ink when this share of the band's height is dark.
+INK_FOLLOW_COLUMN = 0.06
+
+
+def _follow_ink_right(
+    image_bgr: np.ndarray, roi: tuple[float, float, float, float]
+) -> tuple[float, float, float, float]:
+    """Widen the ROI to take in a Student ID written on past the rule's end.
+
+    Parents often write the ID starting near the end of the printed rule, so
+    its last characters fall outside a box that stops there: a Marathi MEMS
+    form (Nov 2026) had the last digit of its ID cut in half, and Vision
+    misread it. From the box's right edge the band is followed rightwards
+    while ink continues with no gap wider than INK_FOLLOW_GAP. The box is
+    never narrowed, and a line with nothing after the rule is left as it is.
+    """
+    height, width = image_bgr.shape[:2]
+    left, top, right, bottom = roi
+    y0, y1 = int(top * height), int(bottom * height)
+    x_start, x_limit = int(right * width), int(INK_FOLLOW_LIMIT * width)
+    if y1 - y0 < 4 or x_start >= x_limit:
+        return roi
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY) if image_bgr.ndim == 3 else image_bgr
+    band = gray[y0:y1, x_start:x_limit] < 160
+    inked = band.sum(axis=0) >= max(2, int((y1 - y0) * INK_FOLLOW_COLUMN))
+    gap_limit = max(4, int(width * INK_FOLLOW_GAP))
+    last, gap = -1, 0
+    for index, has_ink in enumerate(inked):
+        if has_ink:
+            last, gap = index, 0
+        else:
+            gap += 1
+            if gap > gap_limit:
+                break
+    if last < 0:
+        return roi
+    new_right = min(INK_FOLLOW_LIMIT, (x_start + last) / width + 0.010)
+    if new_right <= right:
+        return roi
+    debug_log(f"[LAYOUT] Student ID runs on past the rule - box widened {right:.3f} -> {new_right:.3f}")
+    return (left, top, new_right, bottom)
 
 
 def _roi_from_matched_rule(

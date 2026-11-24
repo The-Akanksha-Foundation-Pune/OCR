@@ -104,7 +104,7 @@ def test_the_printed_school_index_is_never_a_student_id() -> None:
     assert extract._is_printed_number("School Index No. 11.15.263")
     assert extract._is_printed_number("ex No. 11.15.263")
     assert extract._is_printed_number("11.15.263")
-    assert not extract._is_printed_number("ADICHA300617")
+    assert not extract._is_printed_number("ABCDEF010101")
     assert not extract._is_printed_number("aadmis.310714")
     assert not extract._is_printed_number("SIMNO.310714")
 
@@ -132,3 +132,59 @@ def test_the_worker_never_turns_round_a_page_that_shows_its_heading_upright(monk
     # A page without the heading still turns round as before.
     as_came.append(plain)
     assert ocr_worker._layout_orientation(plain, TWO_SHEET) == 180
+
+
+# ------------------------------------------------- the MEMS Marathi form
+def _marathi_back(label_top: float = 0.21) -> np.ndarray:
+    """A white page with the "पालकांची स्वाक्षरी:" label at the left margin and almost no other ink."""
+    path, _, _ = DECLARATION_EXTRA_HEADINGS[2]
+    assert path.name == "palakanchi_swakshari.png"
+    label = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    assert label is not None
+    page = np.full((2339, 1666, 3), 255, np.uint8)
+    y = int(page.shape[0] * label_top)
+    page[y : y + label.shape[0], 186 : 186 + label.shape[1]] = cv2.cvtColor(label, cv2.COLOR_GRAY2BGR)
+    return page
+
+
+def test_the_marathi_back_page_is_a_declaration_not_blank() -> None:
+    result = extract._extract(_marathi_back(), "back.jpg", TWO_SHEET)
+
+    assert result.skipped and result.skip_reason == "declaration"
+
+
+def test_the_marathi_signature_label_far_down_a_page_is_not_a_back() -> None:
+    assert extract.looks_like_declaration(_marathi_back(label_top=0.60)) is False
+
+
+def test_an_id_written_past_the_rule_is_followed_to_its_end() -> None:
+    from server.services.form_layout import _follow_ink_right
+
+    page = np.full((2339, 1656, 3), 255, np.uint8)
+    # Handwriting from 0.50 to 0.70 of the width, on a box that stops at 0.60.
+    page[1050:1090, 828:1160:20] = 0
+    page[1050:1090, 829:1160:20] = 0
+
+    left, top, right, bottom = _follow_ink_right(page, (0.24, 0.445, 0.60, 0.472))
+
+    assert (left, top, bottom) == (0.24, 0.445, 0.472)
+    assert 0.70 <= right <= 0.72
+
+
+def test_a_box_with_nothing_after_the_rule_is_left_as_it_is() -> None:
+    from server.services.form_layout import _follow_ink_right
+
+    page = np.full((2339, 1656, 3), 255, np.uint8)
+    page[1050:1090, 500:900] = 0  # inside the box only
+
+    assert _follow_ink_right(page, (0.24, 0.445, 0.60, 0.472)) == (0.24, 0.445, 0.60, 0.472)
+
+
+def test_ink_after_a_wide_gap_is_not_taken_in() -> None:
+    from server.services.form_layout import _follow_ink_right
+
+    page = np.full((2339, 1656, 3), 255, np.uint8)
+    # Something well clear of the end of the box, past a gap of 0.06.
+    page[1050:1090, 1094:1200] = 0
+
+    assert _follow_ink_right(page, (0.24, 0.445, 0.60, 0.472))[2] == 0.60
